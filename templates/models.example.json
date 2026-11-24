@@ -1,0 +1,16 @@
+{
+  "write": {
+    "provider": "writer-provider",
+    "model": "writer-model-id"
+  },
+  "review": {
+    "provider": "reviewer-provider",
+    "model": "reviewer-model-id",
+    "architect": {
+      "provider": "reviewer-provider",
+      "model": "architect-model-id"
+    }
+  },
+  "last_reviewed": null,
+  "next_review": null
+}
