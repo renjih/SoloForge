@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+# Label-only runs use a separate queue so they cannot replace a pending code run.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}-${{ contains(fromJSON('["labeled","unlabeled"]'), github.event.action) && 'label' || 'code' }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && contains(fromJSON('["opened","synchronize","reopened"]'), github.event.action))
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/gate.yml
+    with:
+      stack: python
+      check: python3 -m pip install --quiet PyYAML==6.0.2 && bash scripts/check.sh
+
+  merge:
+    if: >-
+      always() && github.event_name != 'push' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name)
+    needs: [gate]
+    permissions: {}
+    uses: ./.github/workflows/merge-bot.yml
+    with:
+      arch_detect: "on"
+      arch_shared: '^(scripts/|templates/|docs/arch-rules\.json$)'
+    secrets:
+      token: ${{ secrets.OPS_TOKEN }}

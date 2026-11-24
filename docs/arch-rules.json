@@ -1,0 +1,31 @@
+{
+  "rules": [
+    {
+      "id": "A-01",
+      "rule": "Keep the engine independent of game-specific modules.",
+      "why": "The engine can then be reused across games.",
+      "check": {
+        "type": "forbid",
+        "files": "src/engine/**",
+        "pattern": "from ['\"]\\.\\./game/"
+      }
+    },
+    {
+      "id": "A-02",
+      "rule": "Keep JavaScript source files within 400 lines.",
+      "check": {
+        "type": "max_lines",
+        "files": "src/**/*.js",
+        "max": 400
+      }
+    },
+    {
+      "id": "A-03",
+      "rule": "Keep the license in the repository root.",
+      "check": {
+        "type": "require",
+        "path": "LICENSE"
+      }
+    }
+  ]
+}

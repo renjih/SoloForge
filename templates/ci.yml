@@ -1,0 +1,39 @@
+# Copy to .github/workflows/ci.yml. Replace YOUR_ORG and YOUR_WORKFLOW_REPO,
+# set stack and check for this project, and configure the OPS_TOKEN secret.
+# Run gate on each PR event so a required gate check stays attached to the commit.
+name: ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: YOUR_ORG/YOUR_WORKFLOW_REPO/.github/workflows/gate.yml@main
+    with:
+      stack: node
+      check: npm run check
+
+  merge:
+    if: >-
+      always() && github.event_name != 'push' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name)
+    needs: [gate]
+    permissions: {}
+    uses: YOUR_ORG/YOUR_WORKFLOW_REPO/.github/workflows/merge-bot.yml@main
+    secrets:
+      token: ${{ secrets.OPS_TOKEN }}
