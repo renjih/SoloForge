@@ -1,0 +1,376 @@
+name: merge-bot
+
+on:
+  workflow_call:
+    inputs:
+      arch_detect:
+        description: "Architecture labeling mode (auto when docs/AUTOPILOT.md exists, on, or off)."
+        type: string
+        default: "auto"
+      arch_branches:
+        description: "Branch name regex for automatic architecture labeling."
+        type: string
+        default: "^codex/"
+      arch_paths:
+        description: "Regex for save and data schema paths. An empty value uses the built-in pattern."
+        type: string
+        default: ""
+      arch_shared:
+        description: "Regex for shared policy paths beyond .github/workflows/."
+        type: string
+        default: ""
+    secrets:
+      token:
+        description: "Repository token with Actions read, Contents write, and Pull requests write. Use a token that triggers workflows after merges."
+        required: true
+
+jobs:
+  merge:
+    name: merge-bot
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-slim' }}
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          ARCH_DETECT: ${{ inputs.arch_detect }}
+          ARCH_BRANCHES: ${{ inputs.arch_branches }}
+          ARCH_PATHS: ${{ inputs.arch_paths }}
+          ARCH_SHARED: ${{ inputs.arch_shared }}
+        with:
+          github-token: ${{ secrets.token }}
+          script: |
+            const M = { exports: {} };
+            (function (module) {
+              // >>> arch_gate.js
+              // Architecture checks and change detection without network calls.
+              // Run python3 scripts/sync_arch_gate.py after editing this file to update both workflows.
+              'use strict';
+
+              function globToRe(glob) {
+                let re = '';
+                for (let i = 0; i < glob.length; i++) {
+                  const c = glob[i];
+                  if (c === '*' && glob[i + 1] === '*') {
+                    i++;
+                    if (glob[i + 1] === '/') { i++; re += '(?:.*/)?'; } else re += '.*';
+                  } else if (c === '*') re += '[^/]*';
+                  else if ('\\^$+?.()|{}[]'.includes(c)) re += '\\' + c;
+                  else re += c;
+                }
+                return new RegExp('^' + re + '$');
+              }
+
+              function matchAny(file, globs) {
+                const list = Array.isArray(globs) ? globs : [globs];
+                return list.some((g) => globToRe(String(g)).test(file));
+              }
+
+              // Exclude documentation, tests, assets, and workflow files from source checks.
+              function isSource(file) {
+                if (/\.(md|txt|png|jpe?g|gif|webp|svg|glb|gltf|ogg|mp3|wav)$/i.test(file)) return false;
+                if (/(^|\/)(docs?|tests?|__tests__|art|assets|\.github)\//i.test(file)) return false;
+                if (/\.(test|spec)\.[a-z]+$/i.test(file)) return false;
+                return true;
+              }
+
+              function moduleOf(file) {
+                const seg = file.split('/');
+                if (seg.length === 1) return null;
+                if (seg[0] === 'src') return seg.length > 2 ? 'src/' + seg[1] : null;
+                return seg[0];
+              }
+
+              // The caller checks whether these directories already exist at the PR base.
+              function candidateDirs(files) {
+                const dirs = new Set();
+                for (const f of files) {
+                  if (f.status !== 'added' || !isSource(f.filename)) continue;
+                  const i = f.filename.lastIndexOf('/');
+                  if (i > 0) dirs.add(f.filename.slice(0, i));
+                }
+                return [...dirs].sort();
+              }
+
+              function depNames(filename, text) {
+                const names = new Set();
+                if (!text) return names;
+                if (/(^|\/)package\.json$/.test(filename)) {
+                  let j;
+                  try { j = JSON.parse(text); } catch (e) { return names; }
+                  for (const k of Object.keys((j && j.dependencies) || {})) names.add(k);
+                } else {
+                  for (const line of text.split('\n')) {
+                    const m = line.trim().match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/);
+                    if (m) names.add(m[1].toLowerCase());
+                  }
+                }
+                return names;
+              }
+
+              // Compare dependency names to ignore version-only changes.
+              function depsAdded(filename, baseText, headText) {
+                const before = depNames(filename, baseText);
+                return [...depNames(filename, headText)].filter((n) => !before.has(n)).sort();
+              }
+
+              function isDepFile(file) {
+                return /(^|\/)(package\.json|requirements[^/]*\.txt)$/.test(file);
+              }
+
+              // Summarize architecture changes in the PR file list.
+              function detectHits(files, opts) {
+                const o = opts || {};
+                const hits = [];
+                const src = files.filter((f) => isSource(f.filename));
+                if ((o.newDirs || []).length) hits.push('New source directories: ' + o.newDirs.join(', '));
+                const saveRe = new RegExp(o.savePattern || '(save|schema|migration|\u5b58\u6863)', 'i');
+                const saves = src.filter((f) => saveRe.test(f.filename)).map((f) => f.filename);
+                if (saves.length) hits.push('Save or schema changes: ' + saves.slice(0, 5).join(', '));
+                const shared = files.filter((f) => /^\.github\/workflows\//.test(f.filename) ||
+                  (o.sharedPattern && new RegExp(o.sharedPattern).test(f.filename))).map((f) => f.filename);
+                if (shared.length) hits.push('CI or shared policy changes: ' + shared.slice(0, 5).join(', '));
+                if ((o.newDeps || []).length) hits.push('New external dependencies: ' + o.newDeps.join(', '));
+                const mods = [...new Set(src.map((f) => moduleOf(f.filename)).filter(Boolean))].sort();
+                if (mods.length >= 3) hits.push('Changes across ' + mods.length + ' modules: ' + mods.join(', '));
+                return hits;
+              }
+
+              // Apply the automated rules in docs/arch-rules.json.
+              // io: {list(): string[], read(path): string, exists(path): boolean}
+              function checkRules(io, rulesPath) {
+                const p = rulesPath || 'docs/arch-rules.json';
+                const out = { violations: [], errors: [], checked: 0, manual: 0 };
+                if (!io.exists(p)) return out;
+                let doc;
+                try { doc = JSON.parse(io.read(p)); } catch (e) {
+                  out.errors.push(p + ' contains invalid JSON: ' + e.message);
+                  return out;
+                }
+                const rules = doc && doc.rules;
+                if (!Array.isArray(rules)) { out.errors.push(p + ' requires a rules array'); return out; }
+                const files = io.list();
+                const seen = new Set();
+                // Accept the previous marker in existing rule files.
+                const manual = new Set(['manual', '\u4eba\u5de5']);
+                for (const r of rules) {
+                  const id = r && r.id;
+                  if (!id || !r.rule) { out.errors.push('Rule is missing id or rule'); continue; }
+                  if (seen.has(id)) { out.errors.push('Duplicate rule ID: ' + id); continue; }
+                  seen.add(id);
+                  const c = r.check;
+                  if (!c || manual.has(c) || manual.has(c.type)) { out.manual++; continue; }
+                  const bad = (file, detail) => out.violations.push({ id, rule: r.rule, why: r.why || '', file, detail });
+                  const scope = () => files.filter((f) => matchAny(f, c.files) && !(c.except && matchAny(f, c.except)));
+                  try {
+                    if (c.type === 'forbid') {
+                      if (!c.files || !c.pattern) throw new Error('forbid requires files and pattern');
+                      const re = new RegExp(c.pattern, 'm');
+                      for (const f of scope()) {
+                        const text = io.read(f);
+                        const m = re.exec(text);
+                        if (m) bad(f, 'Line ' + text.slice(0, m.index).split('\n').length + ' matches the forbidden pattern');
+                      }
+                    } else if (c.type === 'max_lines') {
+                      if (!c.files || !(c.max > 0)) throw new Error('max_lines requires files and a positive max');
+                      for (const f of scope()) {
+                        const n = io.read(f).split('\n').length;
+                        if (n > c.max) bad(f, n + ' lines, limit ' + c.max);
+                      }
+                    } else if (c.type === 'require') {
+                      if (!c.path) throw new Error('require needs a path');
+                      if (!io.exists(c.path)) bad(c.path, 'File is missing');
+                    } else {
+                      throw new Error('Unknown check type: ' + c.type);
+                    }
+                    out.checked++;
+                  } catch (e) {
+                    out.errors.push(id + ': ' + e.message);
+                  }
+                }
+                return out;
+              }
+
+              module.exports = { globToRe, matchAny, isSource, moduleOf, candidateDirs, depsAdded, isDepFile, detectHits, checkRules };
+              // <<< arch_gate.js
+            })(M);
+            const A = M.exports;
+            const owner = process.env.REPO_OWNER.toLowerCase();
+            const archMode = process.env.ARCH_DETECT;
+            const archBranch = new RegExp(process.env.ARCH_BRANCHES);
+            const archByBase = new Map();
+
+            async function textAt(path, ref) {
+              try {
+                const { data } = await github.rest.repos.getContent({ ...context.repo, path, ref });
+                return Array.isArray(data) ? '' : Buffer.from(data.content || '', 'base64').toString('utf8');
+              } catch (error) {
+                if (error.status === 404) return null;
+                throw error;
+              }
+            }
+
+            async function archEnabled(ref) {
+              if (archMode !== 'auto') return archMode === 'on';
+              if (!archByBase.has(ref)) {
+                archByBase.set(ref, (await textAt('docs/AUTOPILOT.md', ref)) !== null);
+              }
+              return archByBase.get(ref);
+            }
+
+            async function archHits(pr) {
+              const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+              const newDirs = [];
+              for (const dir of A.candidateDirs(files).slice(0, 30)) {
+                if (newDirs.some((parent) => dir.startsWith(parent + '/'))) continue;
+                if ((await textAt(dir, pr.base.sha)) === null) newDirs.push(dir);
+              }
+              const newDeps = [];
+              for (const file of files) {
+                if (!A.isDepFile(file.filename) || file.status === 'removed') continue;
+                const before = await textAt(file.filename, pr.base.sha);
+                const after = await textAt(file.filename, pr.head.sha);
+                newDeps.push(...A.depsAdded(file.filename, before, after));
+              }
+              return A.detectHits(files, {
+                newDirs, newDeps, savePattern: process.env.ARCH_PATHS, sharedPattern: process.env.ARCH_SHARED,
+              });
+            }
+
+            function reviewsHead(comment, sha) {
+              if (comment.user?.login?.toLowerCase() !== owner) return false;
+              const [heading, ...lines] = (comment.body || '').split(/\r?\n/);
+              if (heading !== '## Review record') return false;
+              const commitLines = lines.filter((line) => line.startsWith('Reviewed commit:'));
+              if (commitLines.length !== 1) return false;
+              const match = /^Reviewed commit: ([0-9a-fA-F]{40})$/.exec(commitLines[0]);
+              return match?.[1].toLowerCase() === sha.toLowerCase();
+            }
+
+            const prs = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'open', per_page: 50 });
+            const log = [];
+            for (const pr of prs) {
+              const labels = pr.labels.map((label) => label.name);
+              const tag = `#${pr.number} ${pr.head.ref}`;
+              const issue = { ...context.repo, issue_number: pr.number };
+              const pull = { ...context.repo, pull_number: pr.number };
+
+              if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
+                if (context.eventName === 'schedule' && !labels.includes('needs-owner')) {
+                  await github.rest.issues.addLabels({ ...issue, labels: ['needs-owner'] });
+                }
+                log.push(`${tag}: Fork pull request requires the repository owner`);
+                continue;
+              }
+
+              if (archMode !== 'off' && archBranch.test(pr.head.ref) && !['arch-ok', 'arch-veto', 'needs-arch'].some((label) => labels.includes(label))) {
+                try {
+                  if (await archEnabled(pr.base.sha)) {
+                    const hits = await archHits(pr);
+                    if (hits.length) {
+                      await github.rest.issues.addLabels({ ...issue, labels: ['needs-arch'] });
+                      labels.push('needs-arch');
+                      await github.rest.issues.createComment({ ...issue,
+                        body: '<!-- arch-detect -->\nThis pull request needs architecture review. Review it against `docs/arch-rules.json`, then apply `arch-ok` and remove `needs-arch` if approved.\n\n' +
+                          hits.map((hit) => '- ' + hit).join('\n') });
+                      log.push(`${tag}: Added needs-arch for ${hits.length} architecture changes`);
+                    }
+                  }
+                } catch (error) {
+                  log.push(`${tag}: Could not detect or report architecture changes: ${error.message}`);
+                }
+              }
+
+              if (!labels.includes('P2') && !labels.includes('P3')) {
+                log.push(`${tag}: Waiting for P2 or P3`);
+                continue;
+              }
+              const blocker = ['needs-owner', 'needs-author', 'needs-rebase', 'needs-arch', 'arch-veto'].find((label) => labels.includes(label));
+              if (blocker) {
+                log.push(`${tag}: Blocked by ${blocker}`);
+                continue;
+              }
+
+              const { data: full } = await github.rest.pulls.get(pull);
+              if (full.state !== 'open' || full.head.sha !== pr.head.sha) {
+                log.push(`${tag}: Pull request changed during this run. Check again next run.`);
+                continue;
+              }
+              if (['behind', 'dirty'].includes(full.mergeable_state)) {
+                await github.rest.issues.addLabels({ ...issue, labels: ['needs-rebase'] });
+                log.push(`${tag}: Added needs-rebase (${full.mergeable_state})`);
+                continue;
+              }
+              if (full.mergeable_state === 'unknown') {
+                log.push(`${tag}: Waiting for GitHub to determine mergeability`);
+                continue;
+              }
+              const sha = full.head.sha;
+
+              // Label-only runs may skip gate. Look back up to 300 runs for a gate that ran.
+              let gate = null;
+              let pages = 0;
+              let more = true;
+              while (!gate && more && pages < 10) {
+                const { data: { workflow_runs: runs } } = await github.rest.actions.listWorkflowRunsForRepo({
+                  ...context.repo, head_sha: sha, branch: pr.head.ref, event: 'pull_request', per_page: 30, page: ++pages,
+                });
+                more = runs.length === 30;
+                for (const run of runs) {
+                  if (run.head_repository && run.head_repository.full_name !== pr.head.repo.full_name) continue;
+                  if (run.pull_requests?.length && !run.pull_requests.some((item) => item.number === pr.number)) continue;
+                  const { data: { jobs } } = await github.rest.actions.listJobsForWorkflowRun({ ...context.repo, run_id: run.id, per_page: 50 });
+                  const job = jobs.find((item) => /(^|\/ )gate$/.test(item.name) && item.conclusion !== 'skipped');
+                  if (!job) continue;
+                  const startedAt = Date.parse(job.started_at || run.created_at);
+                  if (!gate || startedAt > gate.startedAt) gate = { job, startedAt };
+                }
+              }
+              if (!gate) {
+                const reason = more ? `No gate found in ${pages * 30} runs. Push an empty commit to rerun it.` : 'Gate has not run';
+                log.push(`${tag}: ${reason}`);
+                continue;
+              }
+              if (gate.job.status !== 'completed') {
+                log.push(`${tag}: Gate is still running`);
+                continue;
+              }
+              if (gate.job.conclusion !== 'success') {
+                log.push(`${tag}: Gate result: ${gate.job.conclusion}`);
+                continue;
+              }
+
+              const notes = await github.paginate(github.rest.issues.listComments, { ...issue, per_page: 100 });
+              if (!notes.some((comment) => reviewsHead(comment, sha))) {
+                log.push(`${tag}: Waiting for an owner review record for ${sha}`);
+                continue;
+              }
+
+              try {
+                const { data } = await github.rest.pulls.merge({
+                  ...pull, sha, merge_method: 'merge', commit_title: `${full.title} (#${pr.number})`,
+                });
+                if (!data.merged) {
+                  log.push(`${tag}: GitHub declined the merge: ${data.message}`);
+                  continue;
+                }
+              } catch (error) {
+                log.push(`${tag}: Merge failed: ${error.message}`);
+                continue;
+              }
+
+              log.push(`${tag}: Merged`);
+              if (labels.includes('P2')) {
+                try {
+                  await github.rest.issues.createComment({ ...issue, body: 'P2 pull request merged and ready to try.' });
+                } catch (error) {
+                  log.push(`${tag}: Could not post the merge notice: ${error.message}`);
+                }
+              }
+            }
+            await core.summary.addHeading('Merge bot').addList(log.length ? log : ['No open pull requests']).write();
+            console.log(log.join('\n'));
