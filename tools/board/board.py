@@ -61,7 +61,10 @@ def board_dir():
 
 
 def git(*args, cwd=None, check=False):
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+    command = ["git"]
+    if os.environ.get("SOLOFORGE_GIT_HOOKS"):
+        command += ["-c", "core.hooksPath=" + os.environ["SOLOFORGE_GIT_HOOKS"]]
+    result = subprocess.run([*command, *args], cwd=cwd, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=60, env=dict(os.environ))
     if check and result.returncode:
         raise ValueError("A board Git operation failed.")

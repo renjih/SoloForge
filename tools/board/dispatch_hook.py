@@ -7,8 +7,9 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
-from repository import RepositoryError, checkout, environment, restore_config
+from repository import RepositoryError, checkout, environment
 
 
 HERE = Path(__file__).resolve().parent
@@ -60,22 +61,30 @@ def run(mode):
     elif mode == "post":
         if not state_path.is_file():
             return
-        restore_config(repository, directory)
-        card_id = json.loads(state_path.read_text(encoding="utf-8"))["card_id"]
-        result = os.environ.get("SF_RESULT", "failed")
-        summary = Path(env["SF_SUMMARY_FILE"])
-        if not summary.exists():
-            summary.write_text("Dispatcher result: " + result + "\n", encoding="utf-8")
-        args = ["task-finish", "--summary", str(summary), "--branch", env["SF_BRANCH"], "--agent", agent, "--result", result]
-        match = re.search(r"/pull/([1-9][0-9]*)$", os.environ.get("SF_PR_URL", ""))
-        if match:
-            args += ["--pr", match[1]]
-        board(args, env)
-        args = ["set", card_id, "--by", agent, "--note", "Dispatcher handoff recorded."]
-        if match:
-            args += ["--pr", match[1], "--url", os.environ["SF_PR_URL"]]
-        board(args, env)
-        board(["push", "-m", "board: dispatch handoff"], env)
+        # The adapter could alter every file in the pre-task board checkout.
+        # Reclone data and create a separate empty hooks directory after it exits.
+        with tempfile.TemporaryDirectory(prefix="soloforge-board-post-") as post_name:
+            post_root = Path(post_name)
+            hooks_path = post_root / "disabled-hooks"
+            hooks_path.mkdir(mode=0o700)
+            directory = post_root / "board"
+            checkout(repository, directory, env["GH_TOKEN"], hooks_path=hooks_path)
+            env.update(BOARD_DIR=str(directory), SOLOFORGE_GIT_HOOKS=str(hooks_path))
+            card_id = json.loads(state_path.read_text(encoding="utf-8"))["card_id"]
+            result = os.environ.get("SF_RESULT", "failed")
+            summary = Path(env["SF_SUMMARY_FILE"])
+            if not summary.exists():
+                summary.write_text("Dispatcher result: " + result + "\n", encoding="utf-8")
+            args = ["task-finish", "--summary", str(summary), "--branch", env["SF_BRANCH"], "--agent", agent, "--result", result]
+            match = re.search(r"/pull/([1-9][0-9]*)$", os.environ.get("SF_PR_URL", ""))
+            if match:
+                args += ["--pr", match[1]]
+            board(args, env)
+            args = ["set", card_id, "--by", agent, "--note", "Dispatcher handoff recorded."]
+            if match:
+                args += ["--pr", match[1], "--url", os.environ["SF_PR_URL"]]
+            board(args, env)
+            board(["push", "-m", "board: dispatch handoff"], env)
     else:
         raise RepositoryError("Board hook mode must be pre or post.")
 

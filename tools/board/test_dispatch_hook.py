@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import repository
 import dispatch_hook
+import board as board_tools
 
 
 def git(cwd, *args):
@@ -27,6 +29,21 @@ def git(cwd, *args):
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_explicit_post_hooks_override_checkout_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "checkout"
+            hooks = root / "new-empty-hooks"
+            hooks.mkdir()
+            git(root, "init", str(checkout))
+            git(checkout, "config", "core.hooksPath", str(root / "untrusted-hooks"))
+            result = repository.run_git(["config", "--get", "core.hooksPath"], cwd=checkout,
+                                        token="test-token", hooks_path=hooks)
+            self.assertEqual(Path(result.stdout.strip()), hooks)
+            with patch.dict(os.environ, {"SOLOFORGE_GIT_HOOKS": str(hooks)}):
+                result = board_tools.git("config", "--get", "core.hooksPath", cwd=checkout)
+            self.assertEqual(Path(result.stdout.strip()), hooks)
+
     def test_missing_board_starts_without_application_history_and_reclones(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -81,9 +98,20 @@ class DispatchHookTests(unittest.TestCase):
     def test_post_pause_marks_blocked_and_attaches_the_pr(self):
         (self.root / "board-hook.json").write_text(json.dumps({"card_id": "example-card"}))
         self.summary.write_text("Work paused.")
+        def inspect_post(arguments, env):
+            directory = Path(env["BOARD_DIR"])
+            hooks = Path(env["SOLOFORGE_GIT_HOOKS"])
+            self.assertNotEqual(directory, self.root / "board")
+            self.assertFalse(hooks.is_relative_to(self.root / "board"))
+            self.assertTrue(hooks.is_dir())
+            self.assertEqual(list(hooks.iterdir()), [])
+            return ""
         with patch.dict(os.environ, {**self.env, "SF_RESULT": "paused", "SF_PR_URL": "https://github.com/example-maintainer/example-game/pull/8"}):
-            with patch.object(dispatch_hook, "restore_config"), patch.object(dispatch_hook, "board", return_value="") as call:
+            with patch.object(dispatch_hook, "checkout") as clone, patch.object(dispatch_hook, "board", side_effect=inspect_post) as call:
                 dispatch_hook.run("post")
+        hooks = clone.call_args.kwargs["hooks_path"]
+        self.assertEqual(str(hooks), call.call_args.args[1]["SOLOFORGE_GIT_HOOKS"])
+        self.assertFalse(hooks.exists(), "The post-only hooks directory is cleaned up after publication")
         commands = [item.args[0] for item in call.call_args_list]
         self.assertIn("--result", commands[0])
         self.assertIn("paused", commands[0])
@@ -108,22 +136,40 @@ class DispatchHookTests(unittest.TestCase):
         git(self.work, "push", "origin", "main")
         baseline = git(remote, "rev-parse", "main")
         real_checkout = repository.checkout
-        def local_checkout(repo, directory, token):
-            return real_checkout(repo, directory, token, remote_url=str(remote))
+        def local_checkout(repo, directory, token, **kwargs):
+            return real_checkout(repo, directory, token, remote_url=str(remote), **kwargs)
         with patch.dict(os.environ, self.env), patch.object(dispatch_hook, "checkout", side_effect=local_checkout):
             dispatch_hook.run("pre")
         (self.work / "change.txt").write_text("Implemented task\n")
         git(self.work, "add", ".")
         git(self.work, "commit", "-m", "Task change")
         self.summary.write_text("Implemented task; project checks passed.\n")
+        marker = self.root / "old-board-hook-executed"
+        old_hooks = self.root / "board/.git/disabled-hooks"
+        old_hooks.mkdir()
+        injected = old_hooks / "pre-commit"
+        injected.write_text("#!/usr/bin/env bash\nprintf executed > " + shlex.quote(marker.as_posix()) + "\n", encoding="utf-8")
+        injected.chmod(0o755)
+        concurrent = self.root / "concurrent-board"
+        git(self.root, "clone", "--branch", "board", str(remote), str(concurrent))
+        concurrent_path = next(concurrent.glob("cards/*/*.json"))
+        concurrent_card = json.loads(concurrent_path.read_text())
+        concurrent_card["outside_update"] = "Preserve changes made after the pre hook"
+        concurrent_path.write_text(json.dumps(concurrent_card))
+        git(concurrent, "add", ".")
+        git(concurrent, "commit", "-m", "Concurrent board update")
+        git(concurrent, "push", "origin", "board")
         with patch.dict(os.environ, {**self.env, "SF_RESULT": "done", "SF_PR_URL": "https://github.com/example-maintainer/example-game/pull/8"}):
-            with patch.object(dispatch_hook, "restore_config", side_effect=lambda repo, directory: repository.restore_config(repo, directory, remote_url=str(remote))):
+            with patch.object(dispatch_hook, "checkout", side_effect=local_checkout) as clone:
                 dispatch_hook.run("post")
+        self.assertNotEqual(clone.call_args.args[1], self.root / "board")
+        self.assertFalse(marker.exists(), "Post must never execute hooks planted in the adapter-visible board checkout")
         paths = [path for path in git(remote, "ls-tree", "-r", "--name-only", "board").splitlines() if path.startswith("cards/") and path.endswith(".json")]
         self.assertEqual(len(paths), 1)
         card = json.loads(git(remote, "show", "board:" + paths[0]))
         self.assertEqual(card["status"], "in_progress")
         self.assertEqual(card["pr"], 8)
+        self.assertEqual(card["outside_update"], "Preserve changes made after the pre hook")
         for state in ("blocked", "needs_owner"):
             handoff = {"id": card["id"], "status": state, "today": "Implementation prepared.",
                        "state": "Waiting for the recorded next action.", "next": "Wait for the owner response.",
@@ -134,7 +180,7 @@ class DispatchHookTests(unittest.TestCase):
             # An adapter must not redirect credentialed board publication.
             git(self.root / "board", "config", "remote.origin.pushurl", str(self.root / "untrusted.git"))
             with patch.dict(os.environ, {**self.env, "SF_RESULT": "done", "SF_PR_URL": "https://github.com/example-maintainer/example-game/pull/8"}):
-                with patch.object(dispatch_hook, "restore_config", side_effect=lambda repo, directory: repository.restore_config(repo, directory, remote_url=str(remote))):
+                with patch.object(dispatch_hook, "checkout", side_effect=local_checkout):
                     dispatch_hook.run("post")
             card = json.loads(git(remote, "show", "board:" + paths[0]))
             self.assertEqual(card["status"], state, "The post hook must preserve a valid handoff state")

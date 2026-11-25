@@ -20,8 +20,11 @@ def environment(token):
     return env
 
 
-def run_git(args, *, cwd=None, token="", check=True):
-    response = subprocess.run(["git", "-c", "credential.helper=", "-c",
+def run_git(args, *, cwd=None, token="", check=True, hooks_path=None):
+    command = ["git"]
+    if hooks_path is not None:
+        command += ["-c", "core.hooksPath=" + str(hooks_path)]
+    response = subprocess.run([*command, "-c", "credential.helper=", "-c",
                                "credential.helper=!gh auth git-credential", *args], cwd=cwd,
                               env=environment(token), capture_output=True, text=True,
                               encoding="utf-8", timeout=120)
@@ -30,26 +33,29 @@ def run_git(args, *, cwd=None, token="", check=True):
     return response
 
 
-def checkout(repository, directory, token, *, remote_url=None):
+def checkout(repository, directory, token, *, remote_url=None, hooks_path=None):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise RepositoryError("An explicit owner/repository is required.")
     directory = Path(directory).resolve()
     if directory.exists():
         raise RepositoryError("The board checkout requires a fresh directory.")
     url = remote_url or f"https://github.com/{repository}.git"
-    remote = run_git(["ls-remote", "--exit-code", "--heads", url, "refs/heads/board"], token=token, check=False)
+    remote = run_git(["ls-remote", "--exit-code", "--heads", url, "refs/heads/board"],
+                     cwd=directory.parent, token=token, check=False, hooks_path=hooks_path)
     if remote.returncode not in (0, 2):
         raise RepositoryError("Could not inspect the remote board branch.")
     if remote.returncode == 0:
-        run_git(["clone", "--single-branch", "--branch", "board", "--", url, str(directory)], token=token)
+        run_git(["clone", "--single-branch", "--branch", "board", "--", url, str(directory)],
+                cwd=directory.parent, token=token, hooks_path=hooks_path)
     else:
-        run_git(["init", "--initial-branch=board", str(directory)], token=token)
-        run_git(["remote", "add", "origin", url], cwd=directory, token=token)
-    restore_config(repository, directory, remote_url=remote_url)
+        run_git(["init", "--initial-branch=board", str(directory)], cwd=directory.parent,
+                token=token, hooks_path=hooks_path)
+        run_git(["remote", "add", "origin", url], cwd=directory, token=token, hooks_path=hooks_path)
+    restore_config(repository, directory, remote_url=remote_url, hooks_path=hooks_path)
     return directory
 
 
-def restore_config(repository, directory, *, remote_url=None):
+def restore_config(repository, directory, *, remote_url=None, hooks_path=None):
     directory = Path(directory)
     metadata = directory / ".git"
     config = metadata / "config"
@@ -58,7 +64,7 @@ def restore_config(repository, directory, *, remote_url=None):
     url = remote_url or f"https://github.com/{repository}.git"
     config.write_text(
         '[core]\n repositoryformatversion = 0\n bare = false\n logallrefupdates = true\n'
-        + ' hooksPath = ' + json.dumps(str(metadata / "disabled-hooks"), ensure_ascii=False) + '\n'
+        + ' hooksPath = ' + json.dumps(str(hooks_path or metadata / "disabled-hooks"), ensure_ascii=False) + '\n'
         + '[remote "origin"]\n url = ' + json.dumps(url) + '\n fetch = +refs/heads/board:refs/remotes/origin/board\n'
         + '[branch "board"]\n remote = origin\n merge = refs/heads/board\n'
         + '[user]\n name = SoloForge Automation\n email = noreply@example.invalid\n'
