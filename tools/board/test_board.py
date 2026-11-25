@@ -356,6 +356,85 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(self.card(other)["blocker"]["ruled_out"], ["No automatic retry was attempted"])
 
 
+class TaskFinishInvalidIdentifierTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="board-identifier-test-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.directory = self.root / "board"
+        self.env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_CONFIG_")}
+        self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", SOLOFORGE_OWNER=OWNER,
+                        BOARD_DIR=str(self.directory), BOARD_REPO="example-game")
+        run(["git", "init", "--initial-branch=main", str(self.root / "work")], env=self.env)
+        self.work = self.root / "work"
+        self.summary = self.root / "summary.md"
+
+    def b(self, *arguments, check=True):
+        return run([sys.executable, str(HERE / "board.py"), *arguments], cwd=self.work, env=self.env, check=check)
+
+    def finish(self, identifier):
+        block = {"id": identifier, "title": "Untrusted title", "status": "in_progress",
+                 "today": "Untrusted today", "state": "Untrusted state", "next": "Untrusted next"}
+        self.summary.write_text("Task completed.\n```board\n" + json.dumps(block) + "\n```\n")
+        return self.b("task-finish", "--summary", str(self.summary), "--branch", "task/example", "--agent", "echo", check=False)
+
+    def test_invalid_card_id_creates_fallback_without_block_fields(self):
+        for index, identifier in enumerate(("card id", ".", "..", "", None, 0, [], {})):
+            with self.subTest(identifier=identifier):
+                self.directory = self.root / ("board-" + str(index))
+                self.env["BOARD_DIR"] = str(self.directory)
+                result = self.finish(identifier)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Fallback card:", result.stdout)
+                cards = list(self.directory.glob("cards/example-game/*.json"))
+                self.assertEqual(len(cards), 1)
+                card = json.loads(cards[0].read_text())
+                self.assertTrue(card["auto"])
+                self.assertIn("Invalid board block", card["state"])
+                self.assertNotEqual(card["title"], "Untrusted title")
+                self.assertEqual(card["today"], "Task completed.")
+                self.assertNotEqual(card["next"], "Untrusted next")
+
+    def test_ambiguous_card_id_preserves_the_existing_branch_card(self):
+        identifier = self.b("new", "--title", "Owner inspection", "--status", "needs_owner", "--kind", "inspect",
+                            "--question", "Inspect the result", "--branch", "task/example").stdout.strip()
+        path = self.directory / "cards/example-game" / (identifier + ".json")
+        original = json.loads(path.read_text())
+        duplicate = self.b("new", "--repo", "demo-app", "--title", "Other task", "--next", "Review").stdout.strip()
+        duplicate_card = json.loads((self.directory / "cards/demo-app" / (duplicate + ".json")).read_text())
+        duplicate_card["repo"] = "other-app"
+        other = self.directory / "cards/other-app" / (duplicate + ".json")
+        other.parent.mkdir()
+        other.write_text(json.dumps(duplicate_card))
+        result = self.finish(duplicate)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Fallback card:", result.stdout)
+        card = json.loads(path.read_text())
+        self.assertEqual(card["status"], original["status"])
+        self.assertEqual(card["decision"], original["decision"])
+        self.assertEqual(card["title"], original["title"])
+        self.assertIn("Invalid board block", card["state"])
+        self.assertIn("preserved previous state", card["history"][-1]["note"])
+        self.assertEqual(card["today"], "Task completed.")
+        self.assertNotEqual(card["next"], "Untrusted next")
+
+    def test_foreign_card_id_creates_fallback_without_modifying_the_foreign_card(self):
+        identifier = self.b("new", "--repo", "demo-app", "--title", "Other repository", "--next", "Review").stdout.strip()
+        path = self.directory / "cards/demo-app" / (identifier + ".json")
+        original = path.read_bytes()
+        result = self.finish(identifier)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Fallback card:", result.stdout)
+        self.assertEqual(path.read_bytes(), original)
+        cards = list(self.directory.glob("cards/example-game/*.json"))
+        self.assertEqual(len(cards), 1)
+        card = json.loads(cards[0].read_text())
+        self.assertIn("Invalid board block", card["state"])
+        self.assertNotEqual(card["title"], "Untrusted title")
+        self.assertEqual(card["today"], "Task completed.")
+        self.assertNotEqual(card["next"], "Untrusted next")
+
+
 TASK_RULES_TITLE = "## Board handoff"
 
 
