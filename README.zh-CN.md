@@ -1,5 +1,8 @@
 # SoloForge
 
+[![ci](https://github.com/renjih/SoloForge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/renjih/SoloForge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 [English](README.md) | **简体中文**
 
 给「一个人带一支 AI 团队、自己不写代码」的负责人用的 GitHub 工作流。
@@ -64,6 +67,14 @@ Rounds: 8. Tokens: 87288. Duration: 30.1 seconds.
 以上链接指向的文档目前只有英文版。
 
 ## 快速上手
+
+你需要：
+
+- 一个开启了 Actions 的 GitHub 仓库，你在上面有管理员权限，用来加 secrets 和分支规则。
+- 至少一家 AI 服务商的账号。要做到「一家写、另一家审」，需要两家。
+- 你自己的电脑上，只有跑标签脚本和看黑板时才需要：[GitHub CLI](https://cli.github.com/)、Git、Python 3.11 或更高版本。
+
+其余的东西，包括 AI 命令行工具要用的 Node.js，都由 workflow 在 GitHub 托管的 runner 上安装。
 
 三步互相独立，可以只用前面的。建议从门禁开始。
 

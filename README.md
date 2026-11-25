@@ -1,5 +1,8 @@
 # SoloForge
 
+[![ci](https://github.com/renjih/SoloForge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/renjih/SoloForge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **English** | [简体中文](README.zh-CN.md)
 
 A GitHub workflow for one maintainer who runs a team of AI coding agents and does not write the code.
@@ -62,6 +65,14 @@ It does not fit a team whose main gate is human code review, or a project where 
 | Starter | A WeChat mini-game project with the gate and the dispatcher already connected. | [starter guide](templates/wechat-minigame/README.md), [parity checklist](templates/PARITY.md) |
 
 ## Quick start
+
+You need:
+
+- A GitHub repository with Actions enabled, and admin rights on it to add secrets and branch rules.
+- An account with at least one AI provider. Cross-provider review needs two.
+- On your own computer, only for the label script and for reading the board: [GitHub CLI](https://cli.github.com/), Git, and Python 3.11 or later.
+
+Everything else, including Node.js for the provider CLIs, is installed by the workflows on GitHub-hosted runners.
 
 Each step works without the next one. Start with the gate.
 
