@@ -20,9 +20,10 @@ import board as board_tools
 
 
 def git(cwd, *args):
-    result = subprocess.run(["git", "-c", "user.name=Example Maintainer", "-c",
-                             "user.email=maintainer@example.invalid", *args], cwd=cwd,
-                            capture_output=True, text=True, encoding="utf-8", env=repository.environment(""))
+    with tempfile.TemporaryDirectory() as config:
+        result = subprocess.run(["git", "-c", "user.name=Example Maintainer", "-c",
+                                 "user.email=maintainer@example.invalid", *args], cwd=cwd,
+                                capture_output=True, text=True, encoding="utf-8", env=repository.environment("", config))
     if result.returncode:
         raise AssertionError(result.stderr)
     return result.stdout.strip()

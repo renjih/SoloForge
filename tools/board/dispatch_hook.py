@@ -25,6 +25,11 @@ def board(arguments, env):
 
 
 def run(mode):
+    with tempfile.TemporaryDirectory(prefix="soloforge-board-hook-gh-") as config:
+        _run(mode, config)
+
+
+def _run(mode, gh_config_dir):
     required = ("SF_REPOSITORY", "SF_OWNER", "SF_WORKDIR", "SF_INSTRUCTION_FILE", "SF_TASK_ID", "SF_BRANCH", "SF_ISSUE")
     if any(not os.environ.get(key) for key in required):
         raise RepositoryError("Dispatcher board variables are missing.")
@@ -35,7 +40,7 @@ def run(mode):
     directory = temporary / "board"
     state_path = temporary / "board-hook.json"
     agent = os.environ.get("SF_ADAPTER", "adapter")
-    env = environment(os.environ.get("GH_TOKEN", ""))
+    env = environment(os.environ.get("GH_TOKEN", ""), gh_config_dir)
     env.update({key: value for key, value in os.environ.items() if key.startswith("SF_")
                 and key not in ("SF_GITHUB_TOKEN", "SF_AUTH_SECRET_TOKEN")})
     env.update(SOLOFORGE_OWNER=os.environ["SF_OWNER"], BOARD_DIR=str(directory),

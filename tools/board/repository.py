@@ -5,18 +5,20 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 
 class RepositoryError(Exception):
     pass
 
 
-def environment(token):
+def environment(token, gh_config_dir):
     excluded = {"CODEX_AUTH_JSON", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN",
                 "SF_GITHUB_TOKEN", "SF_AUTH_SECRET_TOKEN"}
     env = {key: value for key, value in os.environ.items()
            if key not in excluded and not key.startswith(("GIT_CONFIG_", "INPUT_", "ACTIONS_"))}
-    env.update(GH_TOKEN=token, GH_HOST="github.com", GIT_TERMINAL_PROMPT="0")
+    env.update(GH_TOKEN=token, GH_HOST="github.com", GH_CONFIG_DIR=str(gh_config_dir),
+               GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     return env
 
 
@@ -24,10 +26,11 @@ def run_git(args, *, cwd=None, token="", check=True, hooks_path=None):
     command = ["git"]
     if hooks_path is not None:
         command += ["-c", "core.hooksPath=" + str(hooks_path)]
-    response = subprocess.run([*command, "-c", "credential.helper=", "-c",
-                               "credential.helper=!gh auth git-credential", *args], cwd=cwd,
-                              env=environment(token), capture_output=True, text=True,
-                              encoding="utf-8", timeout=120)
+    with tempfile.TemporaryDirectory(prefix="soloforge-board-gh-") as config:
+        response = subprocess.run([*command, "-c", "credential.helper=", "-c",
+                                   "credential.helper=!gh auth git-credential", *args], cwd=cwd,
+                                  env=environment(token, config), capture_output=True, text=True,
+                                  encoding="utf-8", timeout=120)
     if check and response.returncode:
         raise RepositoryError("Board Git operation failed.")
     return response

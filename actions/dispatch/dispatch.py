@@ -43,6 +43,12 @@ def clean_env():
             and not key.startswith(("GIT_CONFIG_", "GIT_ASKPASS", "SSH_ASKPASS", "ACTIONS_", "INPUT_", "SF_"))}
 
 
+def execute_gh(command, token, **kwargs):
+    with tempfile.TemporaryDirectory(prefix="soloforge-gh-") as config:
+        return execute(command, env={**clean_env(), "GH_TOKEN": token, "GH_HOST": "github.com",
+                                     "GH_CONFIG_DIR": config}, **kwargs)
+
+
 def execute(command, *, cwd=None, env=None, input=None, timeout=120):
     if os.name == "nt" and command[0] == "bash":
         shell = shutil.which("bash")
@@ -150,8 +156,7 @@ class GitHub:
         command = ["gh", "api", "--hostname", "github.com", "repos/" + self.repository + suffix]
         if body is not None:
             command += ["--method", method or "POST", "--input", "-"]
-        response = execute(command, env={**clean_env(), "GH_TOKEN": self.token},
-                           input=json.dumps(body) if body is not None else None)
+        response = execute_gh(command, self.token, input=json.dumps(body) if body is not None else None)
         if response.returncode:
             if missing and re.search(r"HTTP 404\b", response.stderr):
                 return None
@@ -174,9 +179,9 @@ class GitHub:
         return self.api(f"/issues/{number}/comments", {"body": body})
 
     def list_comments(self, number):
-        response = execute(["gh", "api", "--hostname", "github.com", "--paginate", "--slurp",
+        response = execute_gh(["gh", "api", "--hostname", "github.com", "--paginate", "--slurp",
                             f"repos/{self.repository}/issues/{number}/comments?per_page=100"],
-                           env={**clean_env(), "GH_TOKEN": self.token})
+                             self.token)
         if response.returncode:
             raise DispatchError("Could not read the dispatch rate-limit ledger.")
         try:
@@ -206,7 +211,8 @@ class Git:
         self.hooks = hooks
 
     def run(self, *args, cwd=None, network=False):
-        env = {**clean_env(), "GIT_TERMINAL_PROMPT": "0"}
+        env = {**clean_env(), "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_GLOBAL": os.devnull,
+               "GIT_CONFIG_NOSYSTEM": "1"}
         if network:
             basic = base64.b64encode(("x-access-token:" + self.settings.token).encode()).decode()
             env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0=f"http.https://github.com/{self.settings.repository}.git.extraheader",
@@ -347,9 +353,9 @@ def secret_values(value):
 
 
 def write_auth_secret(settings, auth_path):
-    response = execute(["gh", "secret", "set", "CODEX_AUTH_JSON", "--repo", settings.repository,
+    response = execute_gh(["gh", "secret", "set", "CODEX_AUTH_JSON", "--repo", settings.repository,
                         "--app", "actions"], input=auth_path.read_text(encoding="utf-8"),
-                       env={**clean_env(), "GH_TOKEN": settings.auth_secret_token, "GH_HOST": "github.com"})
+                         token=settings.auth_secret_token)
     if response.returncode:
         raise DispatchError("Refreshed Codex login could not be saved to the caller repository Secret.")
 
@@ -407,8 +413,10 @@ def run_hook(command, env, settings, result, pr_url):
         raise DispatchError("Task hooks must be trusted shell command strings.")
     hook_env = {**clean_env(), **{key: value for key, value in env.items() if key.startswith("SF_")},
                 "GH_TOKEN": settings.token, "SF_RESULT": result, "SF_PR_URL": pr_url}
-    response = execute(["bash", "-e", "-o", "pipefail", "-c", command], cwd=settings.workdir,
-                       env=hook_env, timeout=1200)
+    with tempfile.TemporaryDirectory(prefix="soloforge-hook-gh-") as config:
+        hook_env["GH_CONFIG_DIR"] = config
+        response = execute(["bash", "-e", "-o", "pipefail", "-c", command], cwd=settings.workdir,
+                           env=hook_env, timeout=1200)
     if response.returncode:
         raise DispatchError("A task hook failed.")
 
