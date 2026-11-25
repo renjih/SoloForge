@@ -29,3 +29,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s adapters -p 'test_*.py
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/board -p 'test_*.py' -v
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_board_workflow.py' -v
 bash -n tools/board/board-hook.sh
+
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_quota_patrol.py' -v
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_runner_setup.py' -v
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_template_workflow.py' -v
+bash -n scripts/runner/setup.sh
+(
+  cd templates/wechat-minigame
+  node scripts/check.mjs
+  node --test 'test/**/*.test.mjs'
+)

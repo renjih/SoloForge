@@ -228,6 +228,21 @@ An adapter or command failure fails the Action. Provider diagnostic logs stay
 private; adapters should
 write a concise publishable summary without credentials or personal data.
 
+## Optional quota ledger
+
+Set a positive `quota.ledger_issue` in the caller's runtime model configuration to
+append a fenced JSON usage record to that issue after each prepared task. The
+issue belongs to the caller repository; there is no alternate ledger owner or
+repository input. Omit this setting to disable the ledger.
+
+Records contain task identifiers, configured model and effort, outcome, wall
+duration, observed rounds/tokens, and sanitized quota windows. Instructions,
+summaries, diagnostic logs, credentials, and account fields are excluded. Missing
+telemetry stays unknown. A post-task quota read runs only when enough task time
+remains; it does not invoke the model again. Ledger notification failure emits a
+fixed warning and never retries task publication. Use the
+[quota patrol](quota-patrol.md) to inspect and acknowledge the ledger.
+
 ## Codex login refresh
 
 When using `CODEX_AUTH_JSON`, also set `SOLOFORGE_AUTH_TOKEN` and pass it as

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import shutil
@@ -114,6 +115,53 @@ class DispatchIntegrationTests(unittest.TestCase):
         git(self.seed, "add", ".")
         git(self.seed, "commit", "-m", "Existing feature")
         git(self.seed, "push", "origin", self.api.pr_branch)
+
+    def enable_ledger(self, issue=99):
+        path = self.seed / ".soloforge/models.json"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps({"quota": {"ledger_issue": issue}}))
+        git(self.seed, "add", ".")
+        git(self.seed, "commit", "-m", "Configure caller ledger")
+        git(self.seed, "push", "origin", "main")
+
+    def test_optional_ledger_contains_only_caller_usage_metadata(self):
+        self.enable_ledger()
+        self.assertEqual(self.run_dispatch()["result"], "done")
+        body = next(body for number, body in self.api.comments if number == 99)
+        record = json.loads(re.fullmatch(r"```json\n(.*?)\n```", body, re.S)[1])
+        self.assertEqual(record["repo"], REPOSITORY)
+        self.assertEqual(record["model"], "echo:default")
+        self.assertEqual(record["turns"], 1)
+        self.assertEqual(record["tokens"], 0)
+        self.assertEqual(record["result"], "done")
+        self.assertNotIn("instruction", record)
+        self.assertNotIn("summary", record)
+        self.assertNotIn(self.settings.token, body)
+
+    def test_ledger_records_pauses_without_publication(self):
+        self.enable_ledger()
+        with patch.dict(os.environ, {"SF_ECHO_EXIT": "75"}):
+            self.assertEqual(self.run_dispatch()["result"], "paused")
+        self.assertTrue(any(number == 99 and '"result": "paused"' in body for number, body in self.api.comments))
+        self.assertEqual(self.api.prs, [])
+
+    def test_invalid_ledger_issue_is_rejected_before_the_adapter(self):
+        self.enable_ledger(-1)
+        with self.assertRaisesRegex(dispatch.DispatchError, "ledger_issue"):
+            self.run_dispatch()
+        self.assertFalse((self.settings.workdir / ".soloforge/echo.txt").exists())
+        self.assertEqual(self.api.prs, [])
+
+    def test_ledger_failure_does_not_retry_or_change_publication(self):
+        self.enable_ledger()
+        original = self.api.comment
+        def comment(number, body):
+            if number == 99:
+                raise dispatch.DispatchError("GitHub API request failed.")
+            return original(number, body)
+        with patch.object(self.api, "comment", side_effect=comment):
+            self.assertEqual(self.run_dispatch()["result"], "done")
+        self.assertEqual(len(self.api.prs), 1)
 
     def test_issue_comment_creates_branch_and_pr_with_echo(self):
         baseline = git(self.remote, "rev-parse", "main")
@@ -339,6 +387,14 @@ class PolicyTests(unittest.TestCase):
         self.assertLessEqual(3 * record["total_reported_tokens"], settings.max_tokens)
         self.assertLess(settings.max_tokens, 3 * record["total_reported_tokens"] + 1000)
 
+    def test_quota_ledger_filters_account_fields_and_invalid_numbers(self):
+        snapshot = dispatch.public_quota({"account_id": "private-value", "weekly": {"used_percent": 80, "resets_at": True},
+                                          "five_hour": {"used_percent": float("nan"), "access_token": "private-value"}})
+        self.assertIsNone(snapshot["five_hour"])
+        self.assertEqual(snapshot["weekly"], {"used_percent": 80, "resets_at": None})
+        self.assertNotIn("private-value", json.dumps(snapshot))
+        self.assertEqual(dispatch.quota_level(self.config, snapshot), "low")
+
     def test_repository_override_merges_over_defaults(self):
         combined = dispatch.merge_config(copy.deepcopy(self.config), {"adapters": {"echo": {
             "tiers": {"normal": {"model": "example-model"}}}}})
@@ -445,6 +501,28 @@ runner.supervise_provider([sys.executable, '-u', '-c', provider, sys.argv[2]],
             finally:
                 dispatch.DEADLINE.reset(budget)
             self.assertTrue(pidfile.exists(), "The detached provider must actually start")
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(pidfile.read_text()), 0)
+
+    @unittest.skipUnless(os.name == "posix", "Linux quota process-group cleanup")
+    def test_outer_deadline_stops_detached_quota_server(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "quota.pid"
+            script = """
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location('runner', sys.argv[1])
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
+server = 'import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); input(); time.sleep(60)'
+runner.read_rpc([sys.executable, '-u', '-c', server, sys.argv[2]], timeout=60)
+"""
+            budget = dispatch.DEADLINE.set(time.monotonic() + 1.2)
+            try:
+                with self.assertRaises(dispatch.DispatchTimeout):
+                    dispatch.execute([sys.executable, "-c", script, str(dispatch.ROOT / "adapters/runner.py"), str(pidfile)])
+            finally:
+                dispatch.DEADLINE.reset(budget)
+            self.assertTrue(pidfile.exists(), "The quota server must actually start")
             with self.assertRaises(ProcessLookupError):
                 os.kill(int(pidfile.read_text()), 0)
 

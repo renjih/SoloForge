@@ -1,0 +1,37 @@
+# Pin reusable workflow refs after review. Enable optional merges only after setup.
+name: ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: renjih/SoloForge/.github/workflows/gate.yml@main
+    with:
+      stack: node
+      check: npm run check
+
+  merge:
+    if: >-
+      always() && vars.SOLOFORGE_AUTO_MERGE == 'true' && github.event_name != 'push' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name)
+    needs: [gate]
+    permissions: {}
+    uses: renjih/SoloForge/.github/workflows/merge-bot.yml@main
+    secrets:
+      token: ${{ secrets.SOLOFORGE_TOKEN }}

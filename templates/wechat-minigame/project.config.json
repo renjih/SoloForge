@@ -1,0 +1,18 @@
+{
+  "description": "Example WeChat mini game using the public tourist AppID for local development.",
+  "compileType": "game",
+  "appid": "touristappid",
+  "projectname": "example-game",
+  "setting": { "es6": true, "minified": true, "urlCheck": true },
+  "packOptions": {
+    "ignore": [
+      { "type": "folder", "value": "test" },
+      { "type": "folder", "value": "scripts" },
+      { "type": "folder", "value": "docs" },
+      { "type": "folder", "value": "node_modules" },
+      { "type": "folder", "value": ".github" },
+      { "type": "file", "value": "package.json" },
+      { "type": "file", "value": "package-lock.json" }
+    ]
+  }
+}
