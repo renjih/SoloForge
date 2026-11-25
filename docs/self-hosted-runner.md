@@ -53,15 +53,27 @@ so the token does not appear in command arguments or installer output. `GH_TOKEN
 is still needed to verify repository visibility. Registration output stays on the
 isolated machine; failures produce a fixed error message.
 
-Remove the bootstrap token and any cached operator login before starting the
-runner. Start `run.sh` in the install directory from a clean environment. Ephemeral
-registration removes the runner after one job; it does **not** erase the machine.
-Destroy the VM or securely recreate its filesystem before another job. Do not
-share this environment between unrelated repositories or concurrent jobs.
+Each installer invocation registers exactly one ephemeral runner for one job.
+Remove the bootstrap token and any cached operator login, then start that already
+registered runner with `run.sh` in its install directory from a clean environment.
+Starting `run.sh` connects the existing registration; it does not register a new
+runner.
+
+After its job finishes, the runner deregisters. Before **every next job**, destroy
+the VM or securely recreate its filesystem, then run the installer again to
+register a fresh ephemeral runner. The installer requires a fresh instance or
+install path that does not exist yet; restarting `run.sh` in the previous install
+directory does not replace registration. Deregistration does **not** erase the
+machine. Do not share this environment between unrelated repositories or
+concurrent jobs.
 
 Enable the `CI_RUNNER` repository variable only after auditing every workflow for
 owner-only routing in the private repository. Remove that variable to return to
-hosted runners. If a repository becomes public, remove the variable **and**
+hosted runners. If the variable points to a label whose only matching runner has
+deregistered, eligible jobs remain queued until a new matching runner is
+registered. Alternatively, unset `CI_RUNNER` and rerun the affected workflow so
+runner selection uses a hosted runner; changing the variable does not move a job
+that is already queued. If a repository becomes public, remove the variable **and**
 unregister its runner before accepting public workflows or PRs.
 
 Dispatcher templates stay on hosted runners. Self-hosting the dispatcher requires
