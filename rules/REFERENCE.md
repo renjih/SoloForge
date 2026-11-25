@@ -24,7 +24,11 @@ Checks: <commands and results>
 Findings: <rework addressed and remaining risks>
 ```
 
-Keep the heading and `Reviewed commit` line exactly as shown, substituting the actual SHA. Every new head commit needs a matching owner record. Remove `P2` or `P3` while changes await review and restore the label after approval. Fix conflicts or stale branches and verify the new head before approval.
+Keep the heading as the first line and include exactly one `Reviewed commit: <SHA>` line with the complete 40-character current head SHA. The comment author must be the repository owner; a model name or a bot login does not establish approval. Every new head commit needs a matching owner record.
+
+Publishing this record authorizes merge automation to treat the commit as reviewed. Publish it only after the independent review passes and requested changes are resolved. The automation validates the author and commit format, so it cannot interpret a negative verdict hidden in the findings. Use ordinary comments for failed reviews, remove `P2` or `P3` while changes await review, and keep the appropriate blocking label until resolved. Restore the eligible priority label after approval. Fix conflicts or stale branches and verify the new head before approving it.
+
+The record alone does not merge a PR: a successful gate for the same head, eligible priority labels, and the absence of blocking labels are also required. Fork pull requests always require the maintainer to merge them manually.
 
 For requested changes, include the file and location, why the behavior is wrong, the expected result, and the command that verifies it. Link the latest handoff and give the implementer the previous reviewed commit when asking for a follow-up. Document recurring defects in the project's mistake log with the symptom, root cause, fix, and prevention.
 

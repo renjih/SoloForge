@@ -13,6 +13,7 @@ echo "Model example JSON is valid"
 
 bash scripts/check-clean.sh
 python3 scripts/check-links.py
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_check_links.py' -v
 node scripts/test_arch_gate.js
 node scripts/test_gate_step.js
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_ci_workflow.py' -v
