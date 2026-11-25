@@ -85,12 +85,20 @@ identifiers, auth files, or provider logs in public comments.
   `.soloforge/echo.txt` in the prepared worktree and writes a test summary.
   `SF_ECHO_EXIT=75` simulates a pause without changing the worktree.
 
-Provider CLIs run with permission prompts disabled on the already authorized
-worktree. Use isolated runners and only dispatch trusted same-repository work.
+Provider CLIs run without a sandbox and with permission prompts disabled, as the
+same operating-system user as the dispatcher. Their access is not confined to
+the worktree: they can read files and inspect processes accessible to that user.
 GitHub publication tokens, Actions runtime credentials, composite Action inputs,
 Git credential overrides, the raw auth JSON, and other providers' credentials are
-removed from provider process environments. Keep provider logs private; the
-summary is intended for publication.
+removed from provider process environments to reduce direct exposure. This
+environment scrubbing is **not a security boundary**; credentials in same-user
+files or processes can remain accessible. Loading an adapter from reviewed Action
+source does not provide process or filesystem isolation.
+
+Only dispatch trusted same-repository work. Use an isolated, ephemeral runner for
+each job, without unrelated credentials or persistent state. Restrict GitHub
+fine-grained tokens to the caller repository and the minimum required permissions.
+Keep provider logs private; the summary is intended for publication.
 
 Multiple repositories sharing the same `auth.json` are **not automatically
 serialized**. Per-repository workflow concurrency does not coordinate refreshes

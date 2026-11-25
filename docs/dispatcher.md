@@ -35,6 +35,22 @@ repository. `workdir` defaults to a fresh `soloforge-work` directory under
 `runner.temp`. A pre-existing work directory is refused rather than overwritten.
 Pass GitHub credentials only through `github-token` and `auth-secret-token`.
 
+## Execution trust boundary
+
+Adapters run without a sandbox and with permission prompts disabled, as the
+same operating-system user as the dispatcher. They can access files and inspect
+processes accessible to that user, including state outside the task checkout.
+Removing credentials from adapter environment variables reduces direct exposure;
+it is **not a security boundary** against adapter code or commands it executes.
+Credentials in same-user files or processes may still be accessible.
+
+Pinning the Action to reviewed source controls which adapter is loaded; it does
+not sandbox that adapter or isolate it from the dispatcher. Dispatch only work
+you trust with the runner's effective access. Use an isolated, ephemeral runner
+for each job with no unrelated credentials or persistent project state. Restrict
+GitHub fine-grained tokens to the caller repository and the minimum permissions
+needed for publication or, separately, credential refresh.
+
 ## Triggers and authorization
 
 By default, only comments with `author_association` equal to `OWNER` are accepted.
