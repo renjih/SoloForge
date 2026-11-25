@@ -17,3 +17,11 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_check
 node scripts/test_arch_gate.js
 node scripts/test_gate_step.js
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_ci_workflow.py' -v
+
+python3 -m json.tool actions/dispatch/defaults/models.json >/dev/null
+for script in adapters/codex/run adapters/codex/quota adapters/claude/run adapters/echo/run; do
+  bash -n "$script"
+done
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_dispatch_workflow.py' -v
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s actions/dispatch -p 'test_*.py' -v
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s adapters -p 'test_*.py' -v

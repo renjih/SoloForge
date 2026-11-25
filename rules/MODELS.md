@@ -9,6 +9,16 @@ Assign writing and code review to models from different providers. Choose by the
 3. Pick a writer and a reviewer from different providers. Record the exact model IDs accepted by the tools that will run them. Copy the [example configuration](../templates/models.example.json), replace the placeholder values, and commit the approved settings with the project. Treat the example as a record of the team's choices and map those choices to your runner's inputs if automation uses a different schema.
 4. Give the reviewer the task, diff, repository rules, and reproducible checks. Record the actual review provider and model with the reviewed commit. See the [review record](REFERENCE.md#review-record-and-architecture-review).
 
+## Dispatcher runtime configuration
+
+The [example configuration](../templates/models.example.json) records the approved
+writer and reviewer pair. The dispatch Action instead reads runtime routes and
+quota policy from `.soloforge/models.json` in the caller repository, overlaid on
+the [runtime defaults](../actions/dispatch/defaults/models.json). Set approved
+model IDs there; empty default model strings select the provider CLI's default.
+See [dispatcher configuration](../docs/dispatcher.md#runtime-model-and-quota-configuration)
+for tier selection, partial overrides, quota thresholds, and trusted hooks.
+
 ## Architecture review
 
 - Use the normal reviewer to evaluate changes against the existing [architecture rules](../docs/arch-rules.json), including manual rules. Send violations of existing rules back with the specific rule and a verification step.

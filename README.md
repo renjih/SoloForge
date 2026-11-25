@@ -2,6 +2,11 @@
 
 Soloforge provides reusable GitHub Actions workflows and project rules for teams that use AI to write and independently review code.
 
+API key usage is billed by your AI provider. Set a monthly spending cap in the
+provider dashboard before enabling dispatch. Tasks default to a 30-minute timeout,
+21 observed turns or work items, and 244,000 reported tokens; see the
+[cost controls and their limits](docs/dispatcher.md#cost-controls).
+
 ## Set up project CI
 
 1. Copy the [CI template](templates/ci.yml) into your project's GitHub Actions workflow directory. Set the workflow repository and ref in both `uses:` lines, then set `stack` and `check` for your project. Supported stacks are Node.js, Python, and Godot.
@@ -12,4 +17,5 @@ Soloforge provides reusable GitHub Actions workflows and project rules for teams
 - [AI project rules](rules/AI-PROJECT-RULES.md) and [implementer instructions](AGENTS.md)
 - [Project setup and review reference](rules/REFERENCE.md)
 - [Model selection and monthly review](rules/MODELS.md) with an [example configuration](templates/models.example.json)
+- [Comment dispatcher setup](docs/dispatcher.md) and [adapter contract](adapters/README.md)
 - [Contributing](CONTRIBUTING.md), [security reporting](SECURITY.md), and the [MIT license](LICENSE)
