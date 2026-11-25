@@ -86,7 +86,7 @@ The Action provides configurable per-task limits:
 
 | Action input | Default | Enforcement |
 | --- | --- | --- |
-| `timeout-minutes` | `30` | Stops the adapter process and its descendants after the configured execution time. |
+| `timeout-minutes` | `30` | Applies a deadline to task subprocesses and stops their process trees when time expires. |
 | `max-turns` | `21` | Limits observed turns or completed work items; Claude also receives its native turn limit. |
 | `max-tokens` | `244000` | Stops when reported input plus output token usage reaches the configured budget. |
 
@@ -105,24 +105,41 @@ This is one small-task calibration, not a cost guarantee across models, projects
 CLI versions, or operating systems. Claude was **not benchmarked** because no
 `ANTHROPIC_API_KEY` was supplied; the shared defaults are provisional for Claude.
 
+The task timeout must be positive and at most 90 minutes; turn and token limits
+must be positive integers. Credential refresh and the final notification are
+outside the task deadline so cleanup can finish after provider processes stop.
+The template's 120-minute job limit leaves that headroom.
+
 These inputs become `SF_TIMEOUT_MINUTES`, `SF_MAX_TURNS`, and `SF_MAX_TOKENS` in
-the adapter environment. Claude exposes conversation turns; Codex supervision
-counts completed output and tool work items because its execution interface does
-not provide the same native turn control. The token supervisor can stop only
+the adapter environment; the provider receives the remaining task time. Claude
+exposes conversation turns; Codex supervision counts unique completed work items,
+including reasoning, plans, output, and tool work, because its execution interface
+does not provide the same native turn control. The token supervisor can stop only
 when the provider emits usage. An in-flight request can exceed the budget, and a
 CLI that omits usage cannot provide a measured token ceiling. These controls do
 not replace a provider spending cap.
 
-The dispatcher permits at most three starts per issue or PR in a rolling
-60-minute window. It refuses a fourth attempt and comments without starting the
-provider. Serializing the same issue in the workflow keeps this limit effective.
-Failures never trigger an automatic retry; a new authorized comment is required
-to start another attempt and still counts against the hourly limit.
+The dispatcher permits at most three reserved starts per issue or PR in a rolling
+60-minute window. It records each reservation before repository lookup, checkout,
+or hooks; failures, fork refusals, and duplicate branches consume a reservation.
+It reads the complete comment history using GitHub's server timestamps and
+rechecks the reservation order to protect concurrent callers. A fourth attempt
+returns `rate_limited`, retires its temporary reservation, and comments without
+starting the provider. Keep the workflow's same-issue queue enabled as well. Failures never
+trigger an automatic retry; a new authorized comment is required to start another
+attempt and still counts against the hourly limit.
 
-At the end of an authorized task attempt, the dispatcher posts its outcome,
-observed rounds, and elapsed time, including failure, quota pause, and timeout.
-Execution-time or usage exhaustion stops the task without publishing its changes.
-Missing provider usage is reported as unavailable rather than as zero.
+At the end of every recognized authorized attempt, the dispatcher posts its
+outcome, observed rounds, and elapsed time, including refusal, duplicate,
+failure, quota pause, and timeout. An attempt that has not run the provider has
+zero observed rounds; missing token usage is reported as unavailable.
+
+An adapter quota or usage pause, or a timeout before publication starts, leaves
+task changes unpublished. If the task deadline expires after a push starts, the
+server may already have accepted it even though the client has stopped. The
+result is `publication_unknown`: inspect the remote branch before requesting
+another attempt. The dispatcher never automatically retries the push or task.
+
 Pause comments distinguish insufficient provider quota from an exhausted execution
 budget. A third-party adapter returning `75` without a reason is reported as an
 unclassified adapter pause rather than being mislabeled as quota exhaustion.
@@ -185,6 +202,14 @@ precedence. These are trusted Bash commands executed in the prepared task
 checkout. Never build them from comment text or other event fields. Review hook
 changes before dispatching code with credentials.
 
+The [dispatch template](../templates/dispatch.yml) connects these hooks to the
+caller's orphan `board` branch using the Action's trusted
+[board helper](../tools/board/dispatch_hook.py). Its pre-hook records the active
+task and appends board context to the instruction file; its post-hook records the
+handoff and links the resulting PR. See the [board rules](../rules/BOARD.md) for
+states, Stop hooks, reports, and archiving. Replace both hook inputs with empty
+strings to opt out when the runtime configuration has no hook commands.
+
 Hooks receive the adapter's `SF_` contract variables plus `SF_REPOSITORY`,
 `SF_OWNER`, `SF_ISSUE`, `SF_TASK_ID`, `SF_MODE`, `SF_BRANCH`, `SF_ACTION_ROOT`, and
 `SF_TIER`. They receive `GH_TOKEN` for caller-repository integration, but no
@@ -192,13 +217,15 @@ provider keys or raw auth JSON. Read instructions from `SF_INSTRUCTION_FILE` as
 data. The pre-hook sees `SF_RESULT=running`; the post-hook receives `SF_RESULT`
 and `SF_PR_URL` after the task attempt. Post-hook results include `done`,
 `no_change`, `paused`, or `failed`. Failures before the task attempt may occur
-before hooks start. A failed hook fails the Action; it cannot undo an already
-published commit.
+before hooks start. The post-hook is skipped when the task deadline has expired.
+A failed hook fails the Action; it cannot undo an already published commit.
 
 Successful Action outputs are `result`, `branch`, and `pr_url`. Results also
 include `ignored` for unmatched or unauthorized comments, `refused` for fork
-PRs, and `duplicate` for an existing issue task branch. An adapter or command
-failure fails the Action. Provider diagnostic logs stay private; adapters should
+PRs, `duplicate` for an existing issue task branch, `rate_limited` for a rejected
+fourth start, and `publication_unknown` for a timeout after publication began.
+An adapter or command failure fails the Action. Provider diagnostic logs stay
+private; adapters should
 write a concise publishable summary without credentials or personal data.
 
 ## Codex login refresh

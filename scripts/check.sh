@@ -25,3 +25,7 @@ done
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_dispatch_workflow.py' -v
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s actions/dispatch -p 'test_*.py' -v
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s adapters -p 'test_*.py' -v
+
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/board -p 'test_*.py' -v
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_board_workflow.py' -v
+bash -n tools/board/board-hook.sh

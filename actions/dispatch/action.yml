@@ -27,7 +27,7 @@ inputs:
     description: Optional token with caller repository secrets write access for Codex login refresh.
     default: ""
   timeout-minutes:
-    description: Maximum adapter execution minutes before its processes are stopped.
+    description: Task subprocess deadline in minutes (positive, at most 90); credential cleanup and final notification are exempt.
     default: "30"
   max-turns:
     description: Maximum observed adapter turns or completed work items per task.
@@ -38,7 +38,7 @@ inputs:
 
 outputs:
   result:
-    description: Outcome (done, no_change, paused, ignored, refused, or duplicate).
+    description: Outcome (done, no_change, paused, ignored, refused, duplicate, rate_limited, or publication_unknown).
     value: ${{ steps.dispatch.outputs.result }}
   branch:
     description: Branch receiving the task changes.

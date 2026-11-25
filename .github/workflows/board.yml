@@ -1,0 +1,33 @@
+name: board
+
+on:
+  schedule:
+    - cron: "41 */2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: soloforge-board-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: read
+      issues: read
+      actions: read
+    env:
+      SOLOFORGE_OWNER: ${{ github.repository_owner }}
+      SF_REPOSITORY: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Maintain board data
+        run: python3 tools/board/maintain.py
