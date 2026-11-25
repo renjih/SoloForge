@@ -1,0 +1,51 @@
+# Copy to .github/workflows/dispatch.yml and pin the action ref after review.
+# The dispatcher validates the comment again and refuses fork pull requests.
+# API keys are recommended when dispatching across multiple repositories.
+name: dispatch
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# The composite action cannot declare workflow concurrency.
+concurrency:
+  group: soloforge-dispatch-${{ github.repository }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install adapter command line tools
+        run: npm install --global @openai/codex @anthropic-ai/claude-code
+      - name: Dispatch task
+        uses: renjih/SoloForge/actions/dispatch@main
+        with:
+          github-token: ${{ secrets.SOLOFORGE_TOKEN || github.token }}
+          repository: ${{ github.repository }}
+          workdir: ${{ runner.temp }}/soloforge-work
+          triggers: '{"/codex":"codex","/claude":"claude"}'
+          allowed-associations: '["OWNER"]'
+          pre_task: ""
+          post_task: ""
+          auth-secret-token: ${{ secrets.SOLOFORGE_AUTH_TOKEN }}
+          timeout-minutes: "30"
+          max-turns: "8"
+          max-tokens: "16000"
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

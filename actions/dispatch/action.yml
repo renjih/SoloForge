@@ -1,0 +1,68 @@
+name: SoloForge dispatcher
+description: Turn an authorized issue or pull request comment into a task for an adapter.
+
+inputs:
+  github-token:
+    description: Token for the caller repository, with contents, issues, and pull requests write permissions.
+    required: true
+  repository:
+    description: Owner and repository name for task publication and credential refresh.
+    default: ${{ github.repository }}
+  workdir:
+    description: Isolated working directory for the task checkout.
+    default: ${{ runner.temp }}/soloforge-work
+  triggers:
+    description: JSON object mapping comment trigger words to adapter names.
+    default: '{"/codex":"codex","/claude":"claude"}'
+  allowed-associations:
+    description: JSON list of permitted comment author associations.
+    default: '["OWNER"]'
+  pre_task:
+    description: Optional command to run in the task checkout before the adapter.
+    default: ""
+  post_task:
+    description: Optional command to run in the task checkout after the adapter.
+    default: ""
+  auth-secret-token:
+    description: Optional token with caller repository secrets write access for Codex login refresh.
+    default: ""
+  timeout-minutes:
+    description: Maximum adapter execution minutes before its processes are stopped.
+    default: "30"
+  max-turns:
+    description: Maximum observed adapter turns or completed work items per task.
+    default: "8"
+  max-tokens:
+    description: Stop when provider-reported input and output tokens reach this task budget.
+    default: "16000"
+
+outputs:
+  result:
+    description: Outcome (done, no_change, paused, ignored, refused, or duplicate).
+    value: ${{ steps.dispatch.outputs.result }}
+  branch:
+    description: Branch receiving the task changes.
+    value: ${{ steps.dispatch.outputs.branch }}
+  pr_url:
+    description: URL of the created or updated pull request.
+    value: ${{ steps.dispatch.outputs.pr_url }}
+
+runs:
+  using: composite
+  steps:
+    - id: dispatch
+      name: Dispatch authorized task
+      shell: bash
+      env:
+        SF_GITHUB_TOKEN: ${{ inputs.github-token }}
+        SF_REPOSITORY: ${{ inputs.repository }}
+        SF_WORKDIR: ${{ inputs.workdir }}
+        SF_TRIGGERS: ${{ inputs.triggers }}
+        SF_ALLOWED_ASSOCIATIONS: ${{ inputs.allowed-associations }}
+        SF_PRE_TASK: ${{ inputs.pre_task }}
+        SF_POST_TASK: ${{ inputs.post_task }}
+        SF_AUTH_SECRET_TOKEN: ${{ inputs.auth-secret-token }}
+        SF_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        SF_MAX_TURNS: ${{ inputs.max-turns }}
+        SF_MAX_TOKENS: ${{ inputs.max-tokens }}
+      run: python3 "$GITHUB_ACTION_PATH/dispatch.py"

@@ -1,0 +1,40 @@
+{
+  "adapters": {
+    "codex": {
+      "tiers": {
+        "mechanical": {"model": "", "effort": "low"},
+        "normal": {"model": "", "effort": "medium"},
+        "heavy": {"model": "", "effort": "high"},
+        "ultra": {"model": "", "effort": "high"},
+        "rework": {"model": "", "effort": "high"}
+      },
+      "downgrade": {"model": "", "effort": "medium"}
+    },
+    "claude": {
+      "tiers": {
+        "mechanical": {"model": "", "effort": "low"},
+        "normal": {"model": "", "effort": "medium"},
+        "heavy": {"model": "", "effort": "high"},
+        "ultra": {"model": "", "effort": "high"},
+        "rework": {"model": "", "effort": "high"}
+      },
+      "downgrade": {"model": "", "effort": "medium"}
+    },
+    "echo": {
+      "tiers": {
+        "mechanical": {"model": "", "effort": "low"},
+        "normal": {"model": "", "effort": "medium"},
+        "heavy": {"model": "", "effort": "high"},
+        "ultra": {"model": "", "effort": "high"},
+        "rework": {"model": "", "effort": "high"}
+      }
+    }
+  },
+  "quota": {
+    "five_hour_pause_remaining": 5,
+    "weekly_stop_remaining": 5,
+    "weekly_rework_only_remaining": 15,
+    "weekly_downgrade_remaining": 30
+  },
+  "hooks": {"pre_task": "", "post_task": ""}
+}
