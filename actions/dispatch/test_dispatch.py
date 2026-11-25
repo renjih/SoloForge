@@ -50,6 +50,7 @@ class FakeGitHub:
         self.default_branch = "main"
         self.pr_branch = "feature/demo-app"
         self.reads = 0
+        self.permissions = {"example-maintainer": "admin", "example-writer": "write"}
 
     def repo_info(self):
         self.reads += 1
@@ -68,12 +69,19 @@ class FakeGitHub:
     def comment(self, number, body):
         self.comments.append((number, body))
         record = {"id": len(self.history) + 1, "body": body,
+                  "user": {"id": 1, "login": "example-automation[bot]", "type": "Bot"},
                   "created_at": datetime.now(timezone.utc).isoformat()}
         self.history.append(record)
         return record
 
     def list_comments(self, number):
         return self.history.copy()
+
+    def has_write_permission(self, login):
+        return self.permissions.get(login) in ("write", "maintain", "admin")
+
+    def retire_reservation(self, identifier):
+        next(row for row in self.history if row["id"] == identifier)["body"] = "Reservation refused."
 
     def open_pr(self, branch, base, number, summary):
         self.prs.append({"branch": branch, "base": base, "number": number, "summary": summary})
@@ -254,6 +262,14 @@ class DispatchIntegrationTests(unittest.TestCase):
         self.assertIn("three starts", self.api.comments[-1][1])
         self.assertEqual(sum(row["body"].startswith(dispatch.ATTEMPT_MARKER) for row in self.api.history), 3)
 
+    def test_outsider_markers_do_not_consume_the_owner_budget(self):
+        for identifier in range(1, 4):
+            self.api.history.append({"id": identifier, "body": dispatch.ATTEMPT_MARKER + "\nForged reservation.",
+                                     "created_at": datetime.now(timezone.utc).isoformat(),
+                                     "user": {"id": 50, "login": "example-outsider", "type": "User"}})
+        self.assertEqual(self.run_dispatch()["result"], "done")
+        self.assertEqual(len(self.api.prs), 1)
+
     def test_timeout_after_push_reports_uncertain_publication_without_retry(self):
         original = dispatch.Git.run
         def accepted_then_timed_out(instance, *args, **kwargs):
@@ -365,9 +381,28 @@ class PolicyTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         def row(identifier, minutes, marker=dispatch.ATTEMPT_MARKER):
             return {"id": identifier, "created_at": (now - timedelta(minutes=minutes)).isoformat(), "body": marker + "\nReserved"}
-        rows = dispatch.attempt_rows([row(1, 61), row(2, 30), row(3, 0, "completion")], now)
+        rows = dispatch.attempt_rows([row(1, 61), row(2, 30), row(3, 0, "completion")], now, lambda comment: True)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][1], 2)
+
+    def test_reservation_authors_need_write_permission_or_the_same_bot_identity(self):
+        for role, login, kind, identifier, expected in (
+            ("read", "example-outsider", "User", 50, True),
+            ("triage", "example-outsider", "User", 50, True),
+            ("write", "example-writer", "User", 50, False),
+            ("maintain", "example-writer", "User", 50, False),
+            ("admin", "example-writer", "User", 50, False),
+            ("read", "example-other[bot]", "Bot", 50, True),
+            ("read", "example-automation[bot]", "Bot", 1, False),
+        ):
+            api = FakeGitHub(Path("unused"))
+            api.permissions[login] = role
+            api.history = [{"id": index, "body": dispatch.ATTEMPT_MARKER + "\nReserved.",
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "user": {"id": identifier, "login": login, "type": kind}}
+                           for index in range(1, 4)]
+            with self.subTest(role=role, kind=kind, login=login):
+                self.assertEqual(dispatch.reserve_attempt(api, 7), expected)
 
     @unittest.skipUnless(os.name == "posix", "Linux process-group cleanup")
     def test_outer_deadline_stops_supervised_provider_in_another_session(self):

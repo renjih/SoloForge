@@ -93,6 +93,13 @@ observed rounds, and elapsed time, including failure, quota pause, and timeout.
 Execution-time or usage exhaustion stops the task without publishing its changes.
 Missing provider usage is reported as unavailable rather than as zero.
 
+Reservations count only when posted by an account with current repository write,
+maintain, or admin permission, or by the authenticated bot itself. Bot identity
+comes from GitHub's response to the new reservation, and account permissions come
+from GitHub's collaborator-permission API. An outsider copying a reservation
+marker cannot consume the hourly allowance. Rejected starts retire their own
+reservation marker so they do not extend the cooldown.
+
 ## Runtime model and quota configuration
 
 The [default runtime configuration](../actions/dispatch/defaults/models.json)

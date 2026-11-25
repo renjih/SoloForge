@@ -143,10 +143,10 @@ class GitHub:
         self.repository = settings.repository
         self.token = settings.token
 
-    def api(self, suffix="", body=None, missing=False):
+    def api(self, suffix="", body=None, missing=False, method=None):
         command = ["gh", "api", "--hostname", "github.com", "repos/" + self.repository + suffix]
         if body is not None:
-            command += ["--method", "POST", "--input", "-"]
+            command += ["--method", method or "POST", "--input", "-"]
         response = execute(command, env={**clean_env(), "GH_TOKEN": self.token},
                            input=json.dumps(body) if body is not None else None)
         if response.returncode:
@@ -183,6 +183,13 @@ class GitHub:
             return [comment for page in pages for comment in page]
         except (ValueError, TypeError):
             raise DispatchError("The dispatch rate-limit ledger is invalid.") from None
+
+    def has_write_permission(self, login):
+        result = self.api("/collaborators/" + quote(login, safe="") + "/permission", missing=True)
+        return isinstance(result, dict) and result.get("permission") in ("admin", "maintain", "write")
+
+    def retire_reservation(self, identifier):
+        self.api(f"/issues/comments/{identifier}", {"body": "<!-- soloforge:refused:v1 -->\nDispatch start refused by the hourly limit."}, method="PATCH")
 
     def open_pr(self, branch, base, number, summary):
         return self.api("/pulls", {"head": branch, "base": base,
@@ -509,10 +516,12 @@ def _dispatch(event, settings, github=None, clone_url=None):
     return {"result": result, "branch": task["branch"], "pr_url": pr_url}
 
 
-def attempt_rows(comments, now):
+def attempt_rows(comments, now, accepts):
     rows = []
     for comment in comments:
         if not (comment.get("body") or "").startswith(ATTEMPT_MARKER + "\n"):
+            continue
+        if not accepts(comment):
             continue
         try:
             stamp = datetime.fromisoformat(comment["created_at"].replace("Z", "+00:00"))
@@ -527,20 +536,35 @@ def attempt_rows(comments, now):
 
 
 def reserve_attempt(github, number):
-    now = datetime.now(timezone.utc)
-    if len(attempt_rows(github.list_comments(number), now)) >= 3:
-        return False
     reservation = github.comment(number, ATTEMPT_MARKER + "\nSoloForge task start reserved.")
+    actor = reservation.get("user") or {}
+    bot_id = actor.get("id") if actor.get("type") == "Bot" else None
+    permissions = {}
+
+    def accepts(comment):
+        user = comment.get("user") or {}
+        if type(bot_id) is int and user.get("type") == "Bot" and user.get("id") == bot_id:
+            return True
+        login = user.get("login")
+        if not isinstance(login, str) or not login:
+            return False
+        if login not in permissions:
+            permissions[login] = github.has_write_permission(login)
+        return permissions[login]
     try:
         stamp = datetime.fromisoformat(reservation["created_at"].replace("Z", "+00:00"))
         key = (stamp, reservation["id"])
     except (KeyError, ValueError, TypeError):
         raise DispatchError("GitHub did not confirm a dispatch reservation.") from None
-    rows = attempt_rows(github.list_comments(number), stamp)
+    rows = attempt_rows(github.list_comments(number), stamp, accepts)
     # Refetch after reserving so concurrent callers agree on the first three starts.
     if key not in rows:
         raise DispatchError("The dispatch reservation was not found after creation.")
-    return rows.index(key) < 3
+    if rows.index(key) >= 3:
+        # Do not extend the cooldown with rejected starts.
+        github.retire_reservation(reservation["id"])
+        return False
+    return True
 
 
 def dispatch(event, settings, github=None, clone_url=None):
