@@ -15,7 +15,7 @@ const OLD_SHA = 'abcd' + '1'.repeat(36);
 const PR_NUMBER = 7;
 
 function workflowScript(name, pattern) {
-  const yaml = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', name), 'utf8');
+  const yaml = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', name), 'utf8').replace(/\r\n/g, '\n');
   const match = yaml.match(pattern);
   assert.ok(match, 'Expected a script block in ' + name);
   const source = match[1].split('\n').map((line) => line.replace(/^ {12}/, '')).join('\n');
@@ -63,11 +63,14 @@ async function runBot({
   fullHead = HEAD_SHA,
   mergeHead = HEAD_SHA,
   mergeable = 'clean',
+  draft = false,
+  fullDraft = draft,
   title = 'Update the example game',
 } = {}) {
   const pr = {
     number: PR_NUMBER,
     state: 'open',
+    draft,
     title,
     created_at: '2026-01-01T00:00:00Z',
     labels: labels.map((name) => ({ name })),
@@ -99,7 +102,7 @@ async function runBot({
       pulls: {
         list: listPulls,
         listFiles,
-        get: async () => ({ data: { ...pr, head: { ...pr.head, sha: fullHead }, mergeable_state: mergeable } }),
+        get: async () => ({ data: { ...pr, draft: fullDraft, head: { ...pr.head, sha: fullHead }, mergeable_state: mergeable } }),
         merge: async (request) => {
           mergeRequests.push(request);
           if (request.sha !== mergeHead) throw new Error('Head SHA mismatch');
@@ -210,6 +213,10 @@ async function testBot() {
   await bot('New directories and dependencies add needs-arch', { files: arch }, tagged, /architecture changes/);
   await bot('Reviewed P3 pull requests with a green gate merge', p3, ['MERGE']);
   await bot('Reviewed P2 pull requests announce the merge', { ...p3, labels: ['P2'] }, ['MERGE', 'comment:merge']);
+  await bot('P0 blocks a pull request that also has P3', { ...p3, labels: ['P0', 'P3'] }, [], /Blocked by P0/);
+  await bot('P1 blocks a pull request that also has P2', { ...p3, labels: ['P1', 'P2'] }, [], /Blocked by P1/);
+  await bot('Draft pull requests cannot merge', { ...p3, draft: true }, [], /Draft pull request/);
+  await bot('A pull request converted to draft during the run cannot merge', { ...p3, fullDraft: true }, [], /Draft pull request/);
   await bot('New architecture changes block a P3 pull request', { ...p3, files: arch }, tagged, /Blocked by needs-arch/);
   await bot('An existing needs-arch label blocks merge without a duplicate comment', { ...p3, files: arch, labels: ['P3', 'needs-arch'] }, [], /Blocked by needs-arch/);
   await bot('An architecture veto blocks merge', { ...p3, files: arch, labels: ['P3', 'arch-veto'] }, [], /Blocked by arch-veto/);
@@ -219,6 +226,9 @@ async function testBot() {
   await bot('Auto mode waits for the base policy file', { files: arch, tree: {} }, []);
   await bot('On mode enables detection without a base policy file', { files: arch, tree: {}, env: { ARCH_DETECT: 'on' } }, tagged);
   await bot('Architecture API errors are logged', { files: arch, apiDown: true, env: { ARCH_DETECT: 'on' } }, [], /Could not detect/);
+  await bot('Architecture API failure blocks an otherwise eligible pull request', {
+    ...p3, files: arch, apiDown: true, env: { ARCH_DETECT: 'on' },
+  }, [], /Could not detect/);
   await bot('Branch and shared policy patterns are configurable', {
     branch: 'task/policy', files: [{ filename: 'rules/SHARED.md', status: 'modified' }],
     env: { ARCH_DETECT: 'on', ARCH_BRANCHES: '^task/', ARCH_SHARED: '^rules/' },
