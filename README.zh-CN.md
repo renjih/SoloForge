@@ -8,6 +8,36 @@
 
 SoloForge 是从一套私有流程里抽出来的通用部分，那套流程一直在带几个小游戏项目。它只用到 GitHub Actions、Bash、Python 和 Node.js。AI 的登录或 API key 用你自己的。
 
+```mermaid
+flowchart LR
+    A["你评论<br>/codex 或 /claude"] --> B["派工器让<br>写的那家开工"]
+    B --> C["PR"]
+    C --> D["门禁：你的检查<br>和架构规则"]
+    D --> E["另一家来审"]
+    E --> F{"带 P2 或 P3、<br>检查通过、审过？"}
+    F -- 是 --> G["合并机器人合并"]
+    F -- 否 --> H["等你处理"]
+    B -.-> I["黑板上的任务卡"]
+    G -.-> I
+    I --> J["晨报和收工单"]
+```
+
+第一次真实派工的结果评论，任务是给一个很小的 Python 项目改 5 行：
+
+```text
+SoloForge result: done.
+
+Rounds: 8. Tokens: 87288. Duration: 30.1 seconds.
+```
+
+## 适合谁
+
+适合一个人，或者很小的团队：产品上的决定自己拿，代码交给 AI 写、交给 AI 审。项目要有一条能在 CI 里跑的检查命令，你手上要有两家 AI 服务商的账号。
+
+不适合以人工代码审查为主要把关方式的团队，也不适合不允许 AI 命令行工具在 CI 机器上无沙箱运行的项目。v0.1 不给 AI 加沙箱。
+
+**为什么要两家。** 审的那家不该和写的那家有同样的盲区。没有人读代码的时候，换一家来审是最便宜的独立检查。
+
 ## 怎么运转
 
 1. **你派任务。** 把任务写在 issue 里，然后评论 `/codex <指令>` 或 `/claude <指令>`。默认只有仓库主人的评论能开工。
@@ -64,6 +94,8 @@ API key 按用量计费，钱由你的 AI 服务商收。开启派工之前，�
 
 1. 把[派工模板](templates/dispatch.yml)复制到 `.github/workflows/dispatch.yml`。
 2. 在仓库 secrets 里加 `OPENAI_API_KEY`（用 Codex）或 `ANTHROPIC_API_KEY`（用 Claude）。也可以用 Codex 的登录文件，见 [Codex 登录刷新](docs/dispatcher.md#codex-login-refresh)。
+
+   截至 2026 年 11 月：如果你的 OpenAI 组织领了 ChatGPT 订阅附送的每月 API 额度，OpenAI 会拒绝这个组织用 API key 发起的 Codex 请求（错误码 `codex_byok_restricted_by_api_credit_promo`）。这种情况请用登录文件，或者换一个没领这项权益的组织的 key。
 3. 在仓库设置里允许 GitHub Actions 创建 PR，或者加一个只限本仓库的 `SOLOFORGE_TOKEN`。
 4. 在 issue 下评论：
 
@@ -101,8 +133,9 @@ python3 tools/board/board.py report evening --max 5
 v0.1 是早期版本。
 
 - 门禁、合并机器人和黑板由 [scripts/check.sh](scripts/check.sh) 里的测试覆盖。
-- 派工器的测试用的是测试适配器和本地仓库。它还没有在 GitHub 上用 Codex 或 Claude 完整跑过一个真实任务。默认上限来自一次很小的 Codex 命令行实测。
-- 默认上限偏紧。正常大小的任务可能停在上限上；跑过几次之后请按实际情况调高 `max-turns` 和 `max-tokens`。
+- 派工器已经在 GitHub 托管的 runner 上用 Codex 登录文件完整跑通过一个真实任务：改 5 行，8 个工作项，上报 87,288 个 token，用时 30 秒，最后开出 PR 并更新了黑板上的任务卡。
+- API key 这条路径和 Claude 适配器目前只有测试覆盖，还没有真实运行过。
+- 默认上限偏紧。上面那个 5 行的任务就用掉了两项上限各三分之一以上。正常大小的任务可能停在上限上；跑过几次之后请按实际情况调高 `max-turns` 和 `max-tokens`。
 
 v0.2 计划：
 

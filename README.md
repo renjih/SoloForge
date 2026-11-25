@@ -8,6 +8,36 @@ One provider's model writes. A different provider's model reviews. Priority labe
 
 SoloForge is the generic part of a private setup used to run several small game projects this way. It is plain GitHub Actions, Bash, Python, and Node.js. You bring your own AI login or API key.
 
+```mermaid
+flowchart LR
+    A["You comment<br>/codex or /claude"] --> B["Dispatcher runs<br>the writer"]
+    B --> C["Pull request"]
+    C --> D["Gate: your checks<br>and architecture rules"]
+    D --> E["A different provider<br>reviews"]
+    E --> F{"P2 or P3, green,<br>reviewed?"}
+    F -- yes --> G["Merge bot merges"]
+    F -- no --> H["Waits for you"]
+    B -.-> I["Board card"]
+    G -.-> I
+    I --> J["Morning brief and<br>evening wrap"]
+```
+
+The result comment from the first live run, a five-line change to a small Python project:
+
+```text
+SoloForge result: done.
+
+Rounds: 8. Tokens: 87288. Duration: 30.1 seconds.
+```
+
+## Who it is for
+
+It fits one person, or a very small team, who owns the product decisions and lets AI agents write and review the code. The project needs a single check command that can run in CI, and you need access to two AI providers.
+
+It does not fit a team whose main gate is human code review, or a project where an AI command-line tool must not run unsandboxed on a CI runner. v0.1 does not sandbox the agent.
+
+**Why two providers.** The reviewer should not share the writer's blind spots. When no human reads the code, a second provider is the cheapest independent check available.
+
 ## How it works
 
 1. **You assign a task.** Write it in an issue, then comment `/codex <instruction>` or `/claude <instruction>`. Only the repository owner's comments start work by default.
@@ -62,6 +92,8 @@ API key usage is billed by your AI provider. Set a monthly spending cap in the p
 
 1. Copy the [dispatch template](templates/dispatch.yml) to `.github/workflows/dispatch.yml`.
 2. Add `OPENAI_API_KEY` for Codex or `ANTHROPIC_API_KEY` for Claude as a repository secret. A Codex login file also works; see [Codex login refresh](docs/dispatcher.md#codex-login-refresh).
+
+   As of November 2026, OpenAI rejects Codex requests made with an API key from an organization that receives the monthly API credits included with a ChatGPT subscription (`codex_byok_restricted_by_api_credit_promo`). Use the login file, or a key from an organization without that benefit.
 3. Allow GitHub Actions to create pull requests in the repository settings, or add a repository-scoped `SOLOFORGE_TOKEN`.
 4. Comment on an issue:
 
@@ -99,8 +131,9 @@ Read this before you add a key.
 v0.1 is an early release.
 
 - The gate, merge bot, and board are covered by the tests in [scripts/check.sh](scripts/check.sh).
-- The dispatcher's tests use the test adapter and local repositories. It has not yet completed a real task on GitHub with Codex or Claude. Its default limits come from one small Codex CLI run.
-- The default limits are tight. A normal-sized task may pause at the limit; raise `max-turns` and `max-tokens` after your first runs.
+- The dispatcher has completed a real Codex task on a GitHub-hosted runner with a Codex login file: a five-line change, 8 work items, 87,288 reported tokens, 30 seconds, ending in a pull request and an updated board card.
+- The API-key path and the Claude adapter are covered by tests and have not run live yet.
+- The default limits are tight. That five-line task used more than a third of both. A normal-sized task may pause at the limit; raise `max-turns` and `max-tokens` after your first runs.
 
 Planned for v0.2:
 
