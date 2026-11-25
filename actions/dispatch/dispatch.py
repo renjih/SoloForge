@@ -354,6 +354,7 @@ def adapter_environment(task, settings, temporary, route):
                SF_TIER=route["tier"], SF_INSTRUCTION_FILE=str(temporary / "instruction.md"),
                SF_SUMMARY_FILE=str(temporary / "summary.md"), SF_LOG_FILE=str(temporary / "adapter.log"))
     env["SF_PAUSE_REASON_FILE"] = str(temporary / "pause-reason.txt")
+    env["SF_ADAPTER"] = task["adapter"]
     env.update(SF_MAX_TURNS=str(settings.max_turns), SF_MAX_TOKENS=str(settings.max_tokens),
                SF_METRICS_FILE=str(settings.metrics_file or temporary / "metrics.json"))
     if task["adapter"] == "codex":

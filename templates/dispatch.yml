@@ -39,8 +39,8 @@ jobs:
           workdir: ${{ runner.temp }}/soloforge-work
           triggers: '{"/codex":"codex","/claude":"claude"}'
           allowed-associations: '["OWNER"]'
-          pre_task: ""
-          post_task: ""
+          pre_task: 'python3 "$SF_ACTION_ROOT/tools/board/dispatch_hook.py" pre'
+          post_task: 'python3 "$SF_ACTION_ROOT/tools/board/dispatch_hook.py" post'
           auth-secret-token: ${{ secrets.SOLOFORGE_AUTH_TOKEN }}
           timeout-minutes: "30"
           max-turns: "21"
