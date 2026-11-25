@@ -56,6 +56,11 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(pushed["tasks"], ["trigger-a@2026-11-10T20:00:00+00:00"])
         self.assertEqual(pushed["unknown_at"], NOW)
 
+    def test_pushed_roundtrip_keeps_twenty_one_task_keys(self):
+        keys = [f"trigger-{number}@2026-11-10T20:00:00+00:00" for number in range(21)]
+        text = qp.render_pushed("normal", keys, None, NOW)
+        self.assertEqual(qp.parse_pushed(body(pushed=text))["tasks"], keys)
+
     def test_replace_pushed_keeps_status(self):
         original = body()
         updated = qp.replace_pushed(original, "level: low")
@@ -101,6 +106,39 @@ class ReportTest(unittest.TestCase):
         self.assertNotIn("Quota patrol failed", output["push_message"])
         again = self.run_report(text=body(pushed=output["pushed_text"]), triggers=triggers)
         self.assertIsNone(again["push_message"])
+
+    def test_twenty_one_failed_tasks_stay_acknowledged(self):
+        triggers = [trig(status="FAILED", tid=f"trigger-{number}") for number in range(21)]
+        first = self.run_report(triggers=triggers)
+        self.assertIn("tasks", first["alerts"])
+        acknowledged = body(pushed=first["pushed_text"])
+        again = self.run_report(text=acknowledged, triggers=triggers)
+        self.assertNotIn("tasks", again["alerts"])
+        self.assertFalse(again["pushed_changed"])
+        self.assertIsNone(again["pushed_text"])
+        self.assertIsNone(again["push_message"])
+
+    def test_resolved_task_key_is_removed(self):
+        triggers = [trig(status="FAILED", tid="trigger-a"), trig(status="FAILED", tid="trigger-b")]
+        first = self.run_report(triggers=triggers)
+        triggers[0] = trig(tid="trigger-a")
+        recovered = self.run_report(text=body(pushed=first["pushed_text"]), triggers=triggers)
+        self.assertTrue(recovered["pushed_changed"])
+        self.assertEqual(qp.parse_pushed(body(pushed=recovered["pushed_text"]))["tasks"],
+                         ["trigger-b@2026-11-10T20:00:00+00:00"])
+        self.assertNotIn("tasks", recovered["alerts"])
+        self.assertIsNone(recovered["push_message"])
+
+    def test_unavailable_triggers_keep_all_acknowledged_keys(self):
+        keys = [f"trigger-{number}@2026-11-10T20:00:00+00:00" for number in range(21)]
+        pushed = qp.render_pushed("normal", keys, None, NOW)
+        quiet = qp.report(body(pushed=pushed), [], None, NOW)
+        self.assertFalse(quiet["pushed_changed"])
+        self.assertIsNone(quiet["pushed_text"])
+        changed = qp.report(body(level="low", remaining=25, pushed=pushed), [], None, NOW)
+        self.assertIn("level", changed["alerts"])
+        self.assertEqual(qp.parse_pushed(body(pushed=changed["pushed_text"]))["tasks"], keys)
+        self.assertNotIn("tasks", changed["alerts"])
 
     def test_two_failures_hint_usage(self):
         triggers = [trig(status="FAILED"), trig(name="demo-app", status="FAILED", tid="trigger-b")]

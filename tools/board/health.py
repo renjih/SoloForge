@@ -72,10 +72,19 @@ def collect_repo(project, gh, now):
 
     metadata = read(lambda: gh(prefix), {})
     branch = metadata.get("default_branch", "main")
-    runs = read(lambda: gh(f"{prefix}/actions/runs?branch={branch}&per_page=1"), {}).get("workflow_runs") or []
-    state = (runs[0].get("conclusion") or runs[0].get("status")) if runs else "absent"
-    ci = {"success": "green", "failure": "red", "timed_out": "red", "startup_failure": "red",
-          "in_progress": "running", "queued": "running"}.get(state, state)
+    runs = read(lambda: gh(f"{prefix}/actions/runs?branch={branch}&event=push&per_page=20"), {}).get("workflow_runs") or []
+    runs = [run for run in runs if run.get("event") == "push"]
+    if runs:
+        runs = [run for run in runs if run.get("head_sha") == runs[0].get("head_sha")]
+    states = {run.get("conclusion") or run.get("status") for run in runs}
+    if states & {"failure", "timed_out", "startup_failure"}:
+        ci = "red"
+    elif states & {"in_progress", "queued", "waiting", "pending", "requested"}:
+        ci = "running"
+    elif "success" in states:
+        ci = "green"
+    else:
+        ci = "absent"
     issues = read(lambda: gh(f"{prefix}/issues?state=open&per_page=100"), [])
     pulls = read(lambda: gh(f"{prefix}/pulls?state=open&per_page=100"), [])
     waits, comments = [], []

@@ -110,7 +110,7 @@ def parse_pushed(body):
 
 def render_pushed(level, tasks, unknown_at, now, actions=None):
     return "\n".join([
-        f"level: {level}", "Pushed tasks: " + ("; ".join(tasks[-20:]) if tasks else "none"),
+        f"level: {level}", "Pushed tasks: " + ("; ".join(tasks) if tasks else "none"),
         "Unknown reminder: " + (unknown_at.astimezone(timezone.utc).isoformat(timespec="seconds") if unknown_at else "none"),
         "Actions reminder: " + (actions or "none"),
         "Pushed at: " + now.astimezone(timezone.utc).isoformat(timespec="seconds"),
@@ -291,7 +291,10 @@ def decide(status, pushed, findings, now, issue_url="", zone=timezone.utc):
         actions = now.astimezone(zone).strftime("%Y-%m")
     elif status["actions_ok"] and actions:
         actions = None
-    fresh = [finding for finding in findings if f"{finding['id']}@{finding['fired_at'].isoformat(timespec='seconds')}" not in tasks]
+    if findings is not None:
+        current_keys = {f"{finding['id']}@{finding['fired_at'].isoformat(timespec='seconds')}" for finding in findings}
+        tasks = [key for key in tasks if key in current_keys]
+    fresh = [finding for finding in findings or [] if f"{finding['id']}@{finding['fired_at'].isoformat(timespec='seconds')}" not in tasks]
     if fresh:
         alerts.append("tasks")
         names = ", ".join(f"{finding['name']} {finding['kind']} ({time_text(finding['fired_at'], zone)})" for finding in fresh[:4])
@@ -350,7 +353,7 @@ def report(body, comments, triggers_raw, now, issue_url="", zone=timezone.utc, s
     week_start = status["weekly_reset"] - timedelta(days=7) if status["weekly_reset"] else now - timedelta(days=7)
     week_note = "" if status["weekly_reset"] else "reset unavailable; week means the last 7 days"
     today, week = codex_stats(records, day_start, now), codex_stats(records, week_start, now)
-    decision = decide(status, pushed, findings, now, issue_url, zone)
+    decision = decide(status, pushed, findings if triggers_raw is not None else None, now, issue_url, zone)
     lines = stats_lines(today, week, status, week_note, claude_stats(triggers, now), len(records))
     if triggers_raw is None:
         lines.append("Scheduled task input unavailable; scheduled failure checks skipped")

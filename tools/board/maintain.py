@@ -25,8 +25,10 @@ def main():
         parser.exit(2, "GH_TOKEN is required.\n")
     with tempfile.TemporaryDirectory(prefix="soloforge-board-maintenance-") as temporary:
         directory = Path(temporary) / "board"
+        config = Path(temporary) / "gh-config"
+        config.mkdir(mode=0o700)
         repository.checkout(args.repository, directory, token)
-        env = {**repository.environment(token), "SOLOFORGE_OWNER": args.owner, "BOARD_DIR": str(directory),
+        env = {**repository.environment(token, config), "SOLOFORGE_OWNER": args.owner, "BOARD_DIR": str(directory),
                "BOARD_REPO": args.repository.split("/", 1)[1], "BOARD_ACTOR": "bot"}
         executable = [sys.executable, str(Path(board.__file__))]
         health = ["health", "--by", "workflow"]

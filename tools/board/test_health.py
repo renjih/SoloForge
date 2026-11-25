@@ -42,8 +42,8 @@ def world():
     quiet = "repos/another-owner/demo-app"
     return {
         game: {"default_branch": "main"},
-        f"{game}/actions/runs?branch=main&per_page=1": {
-            "workflow_runs": [{"conclusion": "failure", "status": "completed"}]},
+        f"{game}/actions/runs?branch=main&event=push&per_page=20": {
+            "workflow_runs": [{"event": "push", "head_sha": "game-head", "conclusion": "failure", "status": "completed"}]},
         f"{game}/issues?state=open&per_page=100": [
             issue(12, comments=2), issue(40, ["P3", "needs-author"], comments=1, is_pr=True),
             issue(41, ["needs-arch"], is_pr=True), issue(55, ["needs-owner"])],
@@ -60,13 +60,13 @@ def world():
         f"{game}/pulls?state=closed&sort=updated&direction=desc&per_page=15": [
             {"number": 39, "merged_at": "2026-11-18T01:00:00Z"}, {"number": 38, "merged_at": None}],
         app: {"default_branch": "main"},
-        f"{app}/actions/runs?branch=main&per_page=1": {"workflow_runs": [{"conclusion": "success"}]},
+        f"{app}/actions/runs?branch=main&event=push&per_page=20": {"workflow_runs": [{"event": "push", "head_sha": "app-head", "conclusion": "success"}]},
         f"{app}/issues?state=open&per_page=100": 403,
         f"{app}/pulls?state=open&per_page=100": [],
         f"{app}/issues/1": issue(1),
         f"{app}/pulls?state=closed&sort=updated&direction=desc&per_page=15": [],
         quiet: {"default_branch": "main"},
-        f"{quiet}/actions/runs?branch=main&per_page=1": {"workflow_runs": []},
+        f"{quiet}/actions/runs?branch=main&event=push&per_page=20": {"workflow_runs": []},
         f"{quiet}/issues?state=open&per_page=100": [],
         f"{quiet}/pulls?state=open&per_page=100": [],
         f"{quiet}/pulls?state=closed&sort=updated&direction=desc&per_page=15": [],
@@ -82,6 +82,67 @@ def runner(responses, calls=None):
             raise RuntimeError("Private upstream diagnostics must not be published")
         return response
     return run
+
+
+class PushCiTest(unittest.TestCase):
+    def collect_runs(self, runs):
+        responses, calls = world(), []
+        game = "repos/example-owner/example-game"
+        response = {"workflow_runs": runs}
+        responses[f"{game}/actions/runs?branch=main&event=push&per_page=20"] = response
+        result = health.collect([PROJECTS[0]], health.Gh(runner(responses, calls)), NOW)
+        return result["repos"][0], calls
+
+    def test_scheduled_success_does_not_hide_push_failure(self):
+        row, calls = self.collect_runs([
+            {"event": "schedule", "head_sha": "current", "conclusion": "success"},
+            {"event": "push", "head_sha": "current", "conclusion": "failure"},
+        ])
+        self.assertEqual(row["ci"], "red")
+        self.assertIn("repos/example-owner/example-game/actions/runs?branch=main&event=push&per_page=20", calls)
+
+    def test_push_workflows_on_latest_commit_are_aggregated(self):
+        row, _ = self.collect_runs([
+            {"event": "push", "head_sha": "current", "conclusion": "success"},
+            {"event": "push", "head_sha": "current", "status": "in_progress"},
+        ])
+        self.assertEqual(row["ci"], "running")
+
+    def test_schedule_only_is_absent(self):
+        row, _ = self.collect_runs([
+            {"event": "schedule", "head_sha": "current", "conclusion": "success"},
+        ])
+        self.assertEqual(row["ci"], "absent")
+
+    def test_older_push_failure_does_not_affect_latest_commit(self):
+        row, _ = self.collect_runs([
+            {"event": "push", "head_sha": "current", "conclusion": "success"},
+            {"event": "push", "head_sha": "previous", "conclusion": "failure"},
+        ])
+        self.assertEqual(row["ci"], "green")
+
+    def test_push_failure_and_running_states_take_priority(self):
+        for state in ("failure", "timed_out", "startup_failure", "in_progress", "queued", "waiting", "pending", "requested"):
+            with self.subTest(state=state):
+                failed = state in ("failure", "timed_out", "startup_failure")
+                row, _ = self.collect_runs([
+                    {"event": "push", "head_sha": "current", "conclusion": "success"},
+                    {"event": "push", "head_sha": "current", "status": "queued"},
+                    {"event": "push", "head_sha": "current", "conclusion" if failed else "status": state},
+                ])
+                self.assertEqual(row["ci"], "red" if failed else "running")
+
+    def test_skipped_and_neutral_push_runs_do_not_set_ci_health(self):
+        ignored = [
+            {"event": "push", "head_sha": "current", "conclusion": "skipped"},
+            {"event": "push", "head_sha": "current", "conclusion": "neutral"},
+        ]
+        row, _ = self.collect_runs(ignored)
+        self.assertEqual(row["ci"], "absent")
+        row, _ = self.collect_runs(ignored + [
+            {"event": "push", "head_sha": "current", "conclusion": "success"},
+        ])
+        self.assertEqual(row["ci"], "green")
 
 
 class HealthTest(unittest.TestCase):
@@ -138,12 +199,12 @@ class HealthTest(unittest.TestCase):
         responses, calls = world(), []
         game = "repos/example-owner/example-game"
         responses[game] = {"default_branch": "develop"}
-        responses[f"{game}/actions/runs?branch=develop&per_page=1"] = responses.pop(
-            f"{game}/actions/runs?branch=main&per_page=1")
+        responses[f"{game}/actions/runs?branch=develop&event=push&per_page=20"] = responses.pop(
+            f"{game}/actions/runs?branch=main&event=push&per_page=20")
         responses[f"{game}/issues/12/comments?per_page=100&page=1"].append(
             comment("SoloForge result: paused.", "2026-11-19T19:30:00Z", 9))
         result = health.collect([PROJECTS[0]], health.Gh(runner(responses, calls)), NOW)
-        self.assertIn(f"{game}/actions/runs?branch=develop&per_page=1", calls)
+        self.assertIn(f"{game}/actions/runs?branch=develop&event=push&per_page=20", calls)
         self.assertEqual(result["repos"][0]["dispatcher"]["result"], "paused")
 
     def test_reads_latest_page_of_dispatch_comments(self):

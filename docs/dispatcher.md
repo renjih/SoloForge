@@ -43,6 +43,8 @@ processes accessible to that user, including state outside the task checkout.
 Removing credentials from adapter environment variables reduces direct exposure;
 it is **not a security boundary** against adapter code or commands it executes.
 Credentials in same-user files or processes may still be accessible.
+Publication Git and gh calls ignore user-level and system-level configuration;
+this is still not a security boundary.
 
 Pinning the Action to reviewed source controls which adapter is loaded; it does
 not sandbox that adapter or isolate it from the dispatcher. Dispatch only work
