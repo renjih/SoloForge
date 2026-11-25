@@ -1,6 +1,6 @@
-# Soloforge
+# SoloForge
 
-Soloforge provides reusable GitHub Actions workflows and project rules for teams that use AI to write and independently review code.
+SoloForge provides reusable GitHub Actions workflows and project rules for teams that use AI to write and independently review code.
 
 API key usage is billed by your AI provider. Set a monthly spending cap in the
 provider dashboard before enabling dispatch. Tasks default to a 30-minute timeout,
@@ -18,4 +18,5 @@ provider dashboard before enabling dispatch. Tasks default to a 30-minute timeou
 - [Project setup and review reference](rules/REFERENCE.md)
 - [Model selection and monthly review](rules/MODELS.md) with an [example configuration](templates/models.example.json)
 - [Comment dispatcher setup](docs/dispatcher.md) and [adapter contract](adapters/README.md)
+- [WeChat mini-game starter](templates/wechat-minigame/README.md) and [player-visible parity checklist](templates/PARITY.md)
 - [Contributing](CONTRIBUTING.md), [security reporting](SECURITY.md), and the [MIT license](LICENSE)

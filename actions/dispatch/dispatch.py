@@ -117,6 +117,8 @@ class Settings:
     publication_started: bool = False
     publication_branch: str = ""
     publication_url: str = ""
+    ledger_issue: int | None = None
+    ledger_record: dict | None = None
 
     def validate(self):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository):
@@ -301,6 +303,34 @@ def quota_decision(config, snapshot, mode, tier):
     return "run"
 
 
+def public_quota(snapshot):
+    result = {"read_at": datetime.now(timezone.utc).isoformat(), "five_hour": None, "weekly": None}
+    for name in ("five_hour", "weekly"):
+        window = snapshot.get(name) if isinstance(snapshot, dict) else None
+        used = window.get("used_percent") if isinstance(window, dict) else None
+        reset = window.get("resets_at") if isinstance(window, dict) else None
+        if type(used) in (int, float) and math.isfinite(used) and 0 <= used <= 100:
+            if type(reset) not in (int, float) or not math.isfinite(reset) or not 0 <= reset <= 253402300799:
+                reset = None
+            result[name] = {"used_percent": used, "resets_at": reset}
+    return result
+
+
+def quota_level(config, snapshot):
+    limits = config["quota"]
+    short, weekly = snapshot["five_hour"], snapshot["weekly"]
+    if short and 100 - short["used_percent"] <= limits["five_hour_pause_remaining"]:
+        return "5h_wait"
+    if not weekly:
+        return "unknown"
+    remaining = 100 - weekly["used_percent"]
+    for key, level in (("weekly_stop_remaining", "stopped"), ("weekly_rework_only_remaining", "rework_only"),
+                       ("weekly_downgrade_remaining", "low")):
+        if remaining <= limits[key]:
+            return level
+    return "normal"
+
+
 def safe_summary(path, secrets):
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else "Task completed."
     for secret in sorted((value for value in secrets if value), key=len, reverse=True):
@@ -438,6 +468,15 @@ def _dispatch(event, settings, github=None, clone_url=None):
         trusted_git_config = git_config.read_bytes()
         config = load_config(settings.workdir, settings.action_root, git, trusted_config_ref)
         route = select_route(config, task["adapter"], task["instruction"], task["mode"])
+        quota_decision(config, {}, task["mode"], route["tier"])
+        settings.ledger_issue = config.get("quota", {}).get("ledger_issue")
+        if settings.ledger_issue is not None and (type(settings.ledger_issue) is not int or settings.ledger_issue < 1):
+            raise DispatchError("quota.ledger_issue must be a positive issue number in the caller repository.")
+        if settings.ledger_issue is not None:
+            settings.ledger_record = {"schema": 1, "repo": settings.repository, "number": task["number"],
+                                      "branch": task["branch"], "mode": task["mode"], "adapter": task["adapter"],
+                                      "tier": route["tier"], "model": route["model"] or task["adapter"] + ":default",
+                                      "effort": route["effort"], "level": "unknown", "quota_before": None, "quota_after": None}
         env = adapter_environment(task, settings, temporary, route)
         prompt = ("Read AGENTS.md when present. Make changes and run the repository checks. "
                   "Do not commit, push, merge, or open pull requests; the dispatcher publishes your changes.\n\n"
@@ -475,15 +514,30 @@ def _dispatch(event, settings, github=None, clone_url=None):
                     except ValueError:
                         data = {}
                     decision = quota_decision(config, data, task["mode"], route["tier"])
+                    if settings.ledger_record is not None:
+                        settings.ledger_record["quota_before"] = public_quota(data)
+                        settings.ledger_record["level"] = quota_level(config, settings.ledger_record["quota_before"])
                 if decision == "downgrade":
                     lower = config["adapters"][task["adapter"]]["downgrade"]
                     if any(not isinstance(lower.get(key), str) for key in ("model", "effort")):
                         raise DispatchError("Downgrade settings need model and effort strings.")
                     env.update(SF_MODEL=lower["model"], SF_EFFORT=lower["effort"])
+                    if settings.ledger_record is not None:
+                        settings.ledger_record.update(model=lower["model"] or task["adapter"] + ":default", effort=lower["effort"])
                 remaining = DEADLINE.get() - time.monotonic() if DEADLINE.get() else settings.timeout_minutes * 60
                 env["SF_TIMEOUT_MINUTES"] = str(max(.001, remaining - 1) / 60)
                 code = 75 if decision == "pause" else execute(executable(adapter), cwd=settings.workdir,
                                                               env=env, timeout=3600).returncode
+                if settings.ledger_record is not None and quota_command.is_file() and DEADLINE.get() - time.monotonic() > 35:
+                    try:
+                        after = execute(executable(quota_command), cwd=settings.workdir, env=env, timeout=35)
+                        data = json.loads(after.stdout) if after.returncode == 0 else {}
+                        normalized = public_quota(data)
+                        if normalized["weekly"] or normalized["five_hour"]:
+                            settings.ledger_record["quota_after"] = normalized
+                            settings.ledger_record["level"] = quota_level(config, normalized)
+                    except (ValueError, DispatchError):
+                        print("::warning::Post-task quota telemetry unavailable.", file=sys.stderr)
             finally:
                 reconcile_auth(settings, auth_path, original_auth, secrets)
             if code == 75:
@@ -592,6 +646,7 @@ def dispatch(event, settings, github=None, clone_url=None):
     settings.publication_started = False
     settings.publication_branch = settings.publication_url = ""
     settings.pause_reason = ""
+    settings.ledger_issue = settings.ledger_record = None
     outcome = {"result": "failed", "branch": "", "pr_url": ""}
     with tempfile.TemporaryDirectory(prefix="soloforge-metrics-") as directory:
         settings.metrics_file = Path(directory) / "metrics.json"
@@ -624,9 +679,19 @@ def dispatch(event, settings, github=None, clone_url=None):
                       " The task timed out during publication; inspect the remote branch before dispatching again."
                       if outcome["result"] == "publication_unknown" else
                       " " + pause_description(settings.pause_reason) if outcome["result"] == "paused" else "")
-            github.comment(task["number"], "<!-- soloforge:result:v1 -->\n"
-                           f"SoloForge result: {outcome['result']}.{detail}\n\n"
-                           f"Rounds: {turns}. Tokens: {tokens}. Duration: {time.monotonic() - start:.1f} seconds.")
+            try:
+                github.comment(task["number"], "<!-- soloforge:result:v1 -->\n"
+                               f"SoloForge result: {outcome['result']}.{detail}\n\n"
+                               f"Rounds: {turns}. Tokens: {tokens}. Duration: {time.monotonic() - start:.1f} seconds.")
+            finally:
+                if settings.ledger_record is not None:
+                    record = {**settings.ledger_record, "time": datetime.now(timezone.utc).isoformat(),
+                              "result": outcome["result"], "duration_sec": round(time.monotonic() - start, 1),
+                              "turns": turns if type(turns) is int else None, "tokens": tokens if type(tokens) is int else None}
+                    try:
+                        github.comment(settings.ledger_issue, "```json\n" + json.dumps(record, indent=2) + "\n```")
+                    except DispatchError:
+                        print("::warning::Caller quota ledger could not be updated.", file=sys.stderr)
 
 
 def main():

@@ -435,6 +435,14 @@ def read_rpc(command=None, timeout=30):
 
     reader = threading.Thread(target=read_lines, daemon=True)
     reader.start()
+    previous_handler = None
+    if os.name == "posix" and threading.current_thread() is threading.main_thread():
+        previous_handler = signal.getsignal(signal.SIGTERM)
+
+        def interrupted(signum, frame):
+            raise ProviderInterrupted("quota_cancelled")
+
+        signal.signal(signal.SIGTERM, interrupted)
     try:
         def send(message):
             try:
@@ -473,8 +481,12 @@ def read_rpc(command=None, timeout=30):
         send({"id": 2, "method": "account/rateLimits/read", "params": {}})
         return receive(2)
     finally:
-        stop_process(proc)
-        reader.join(timeout=.2)
+        try:
+            stop_process(proc)
+            reader.join(timeout=.2)
+        finally:
+            if previous_handler is not None:
+                signal.signal(signal.SIGTERM, previous_handler)
 
 
 def read_quota():

@@ -90,15 +90,35 @@ class ReusableWorkflowTests(unittest.TestCase):
     def test_fork_runner_overrides_self_hosted_runner(self):
         self.assertEqual(
             oneline(self.gate["runs-on"]),
-            "$" + "{{ " + f"(github.event_name == 'pull_request' && {HEAD_REPO} != {BASE_REPO}) "
-            "&& 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}",
+            "$" + "{{ " + f"(github.event_name == 'pull_request' && {HEAD_REPO} == {BASE_REPO} && "
+            "github.event.pull_request.user.login == github.repository_owner && vars.CI_RUNNER) || 'ubuntu-latest' }}",
         )
         self.assertEqual(self.gate["steps"][0]["with"]["persist-credentials"], "false")
 
-    def test_merge_bot_only_uses_slim_runner_for_eligible_events(self):
+    def test_merge_bot_only_uses_hosted_runner_for_eligible_events(self):
         self.assertEqual(oneline(self.merge["if"]), SAME_REPO)
-        self.assertEqual(self.merge["runs-on"], "${{ vars.CI_RUNNER || 'ubuntu-slim' }}")
+        self.assertEqual(self.merge["runs-on"], "ubuntu-slim")
         self.assertLessEqual(int(self.merge["timeout-minutes"]), 15)
+
+    def test_only_owner_authored_same_repository_prs_can_select_a_private_runner(self):
+        expression = oneline(self.gate["runs-on"])[3:-2].strip().replace("&&", "and").replace("||", "or")
+        for event, author, head, runner, expected in (
+            ("pull_request", "example-maintainer", "example-maintainer/example-game", "private-runner", "private-runner"),
+            ("pull_request", "example-contributor", "example-maintainer/example-game", "private-runner", "ubuntu-latest"),
+            ("pull_request", "example-maintainer", "example-contributor/example-game", "private-runner", "ubuntu-latest"),
+            ("pull_request", "example-maintainer", "example-maintainer/demo-app", "private-runner", "ubuntu-latest"),
+            ("push", "example-maintainer", "example-maintainer/example-game", "private-runner", "ubuntu-latest"),
+            ("workflow_dispatch", "example-maintainer", "example-maintainer/example-game", "private-runner", "ubuntu-latest"),
+            ("pull_request", "example-maintainer", "example-maintainer/example-game", "", "ubuntu-latest"),
+        ):
+            values = {"github.event_name": event, "github.repository_owner": "example-maintainer",
+                      "github.event.pull_request.user.login": author, HEAD_REPO: head,
+                      BASE_REPO: "example-maintainer/example-game", "vars.CI_RUNNER": runner}
+            code = expression
+            for key in sorted(values, key=len, reverse=True):
+                code = code.replace(key, repr(values[key]))
+            with self.subTest(event=event, author=author, head=head, runner=runner):
+                self.assertEqual(eval(code, {"__builtins__": {}}), expected)
 
     def test_clean_scan_uses_its_workflow_revision_before_project_code(self):
         steps = self.gate["steps"]
