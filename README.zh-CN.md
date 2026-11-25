@@ -90,12 +90,29 @@ Rounds: 8. Tokens: 87288. Duration: 30.1 seconds.
 
 ### 2. 评论派工
 
-API key 按用量计费，钱由你的 AI 服务商收。开启派工之前，先在服务商后台设好每月消费上限。每个任务默认 30 分钟超时、21 轮（或 21 个工作项）、244,000 个上报 token；详见[费用控制及其局限](docs/dispatcher.md#cost-controls)。
+用 API key 时按用量计费，钱由你的 AI 服务商收，开启派工之前先在服务商后台设好每月消费上限。用 ChatGPT 订阅登录时，任务消耗的是你订阅套餐的用量额度。每个任务默认 30 分钟超时、21 轮（或 21 个工作项）、244,000 个上报 token；详见[费用控制及其局限](docs/dispatcher.md#cost-controls)。
 
 1. 把[派工模板](templates/dispatch.yml)复制到 `.github/workflows/dispatch.yml`。
-2. 在仓库 secrets 里加 `OPENAI_API_KEY`（用 Codex）或 `ANTHROPIC_API_KEY`（用 Claude）。也可以用 Codex 的登录文件，见 [Codex 登录刷新](docs/dispatcher.md#codex-login-refresh)。
+2. 给派工器一个 AI 登录。Codex 二选一：
 
-   截至 2026 年 11 月：如果你的 OpenAI 组织领了 ChatGPT 订阅附送的每月 API 额度，OpenAI 会拒绝这个组织用 API key 发起的 Codex 请求（错误码 `codex_byok_restricted_by_api_credit_promo`）。这种情况请用登录文件，或者换一个没领这项权益的组织的 key。
+   - **ChatGPT 订阅。** 任务走你的 ChatGPT 套餐，不按 API 用量另外计费。第一次真实派工走的就是这条路。
+     1. 在一台有浏览器的电脑上，专门为这个仓库登录一次。这样派工器刷新登录时，不会把你平时用的 Codex 挤下线：
+
+        ```bash
+        export CODEX_HOME="$HOME/.codex-soloforge"
+        mkdir -p "$CODEX_HOME"
+        printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+        codex login
+        ```
+
+     2. 把 `$CODEX_HOME/auth.json` 的全部内容加成仓库 secret，名字叫 `CODEX_AUTH_JSON`。
+     3. 建一个只限这个仓库的细粒度令牌，权限是 **Secrets：Read and write**，加成 secret `SOLOFORGE_AUTH_TOKEN`。派工器用它把刷新后的登录写回 `CODEX_AUTH_JSON`。
+     4. 这个仓库里不要再设 `OPENAI_API_KEY`。两个都有时，派工器优先用 API key。
+
+     一个仓库用一份登录：几个仓库共用同一份登录，会互相挤掉。任务被取消时，刷新过的登录可能丢失，重新登录一次、替换 secret 即可。OpenAI 官方的说明见 [Maintain Codex account auth in CI/CD](https://developers.openai.com/codex/auth/ci-cd-auth)；派工器这边的处理见 [Codex 登录刷新](docs/dispatcher.md#codex-login-refresh)。
+   - **API key。** 在仓库 secrets 里加 `OPENAI_API_KEY`。截至 2026 年 11 月：如果你的 OpenAI 组织领了 ChatGPT 订阅附送的每月 API 额度，OpenAI 会拒绝这个组织用 API key 发起的 Codex 请求（错误码 `codex_byok_restricted_by_api_credit_promo`）。这种情况请用订阅登录，或者换一个没领这项权益的组织的 key。
+
+   Claude 需要 `ANTHROPIC_API_KEY`，Claude 适配器暂时不支持订阅登录。
 3. 在仓库设置里允许 GitHub Actions 创建 PR，或者加一个只限本仓库的 `SOLOFORGE_TOKEN`。
 4. 在 issue 下评论：
 

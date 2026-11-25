@@ -88,12 +88,29 @@ Each step works without the next one. Start with the gate.
 
 ### 2. Comment dispatcher
 
-API key usage is billed by your AI provider. Set a monthly spending cap in the provider dashboard before enabling dispatch. Tasks default to a 30-minute timeout, 21 observed turns or work items, and 244,000 reported tokens; see the [cost controls and their limits](docs/dispatcher.md#cost-controls).
+With an API key, usage is billed by your AI provider; set a monthly spending cap in the provider dashboard before enabling dispatch. With a ChatGPT subscription login, tasks draw on your plan's usage limits. Tasks default to a 30-minute timeout, 21 observed turns or work items, and 244,000 reported tokens; see the [cost controls and their limits](docs/dispatcher.md#cost-controls).
 
 1. Copy the [dispatch template](templates/dispatch.yml) to `.github/workflows/dispatch.yml`.
-2. Add `OPENAI_API_KEY` for Codex or `ANTHROPIC_API_KEY` for Claude as a repository secret. A Codex login file also works; see [Codex login refresh](docs/dispatcher.md#codex-login-refresh).
+2. Give the dispatcher an AI login. For Codex, choose one of the two:
 
-   As of November 2026, OpenAI rejects Codex requests made with an API key from an organization that receives the monthly API credits included with a ChatGPT subscription (`codex_byok_restricted_by_api_credit_promo`). Use the login file, or a key from an organization without that benefit.
+   - **ChatGPT subscription.** Tasks use your ChatGPT plan instead of API billing. The first live run used this path.
+     1. On a computer with a browser, create a login just for this repository, so that its refreshes do not sign out the Codex you use every day:
+
+        ```bash
+        export CODEX_HOME="$HOME/.codex-soloforge"
+        mkdir -p "$CODEX_HOME"
+        printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+        codex login
+        ```
+
+     2. Add the whole content of `$CODEX_HOME/auth.json` as the repository secret `CODEX_AUTH_JSON`.
+     3. Create a fine-grained token for this repository only, with **Secrets: Read and write**, and add it as `SOLOFORGE_AUTH_TOKEN`. The dispatcher uses it to save the refreshed login back to `CODEX_AUTH_JSON`.
+     4. Leave `OPENAI_API_KEY` unset in this repository. An API key takes precedence over the login.
+
+     Use one login per repository: repositories that share a login can sign each other out. A cancelled job can lose a refreshed login; log in again and replace the secret. OpenAI describes this pattern in [Maintain Codex account auth in CI/CD](https://developers.openai.com/codex/auth/ci-cd-auth); the dispatcher's side is in [Codex login refresh](docs/dispatcher.md#codex-login-refresh).
+   - **API key.** Add `OPENAI_API_KEY` as a repository secret. As of November 2026, OpenAI rejects Codex requests made with an API key from an organization that receives the monthly API credits included with a ChatGPT subscription (`codex_byok_restricted_by_api_credit_promo`). Use the subscription login in that case, or a key from an organization without that benefit.
+
+   Claude needs `ANTHROPIC_API_KEY`; the Claude adapter does not support a subscription login yet.
 3. Allow GitHub Actions to create pull requests in the repository settings, or add a repository-scoped `SOLOFORGE_TOKEN`.
 4. Comment on an issue:
 
