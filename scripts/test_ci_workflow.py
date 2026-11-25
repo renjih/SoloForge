@@ -40,7 +40,7 @@ class CiWorkflowTests(unittest.TestCase):
     def test_template_uses_repository_placeholders(self):
         jobs = self.template["jobs"]
         for job, workflow in (("gate", "gate"), ("merge", "merge-bot")):
-            self.assertEqual(jobs[job]["uses"], f"YOUR_ORG/YOUR_WORKFLOW_REPO/.github/workflows/{workflow}.yml@main")
+            self.assertEqual(jobs[job]["uses"], f"YOUR_ORG/YOUR_WORKFLOW_REPO/.github/workflows/{workflow}.yml@v0")
 
     def test_gate_skipping_events_queue_apart_from_code_events(self):
         gate_condition = self.ci["jobs"]["gate"]["if"]

@@ -86,7 +86,7 @@ class DispatchWorkflowTests(unittest.TestCase):
     def test_template_passes_credentials_only_to_dispatch_step(self):
         steps = self.template["jobs"]["dispatch"]["steps"]
         dispatch = steps[-1]
-        self.assertTrue(dispatch["uses"].endswith("/actions/dispatch@main"))
+        self.assertTrue(dispatch["uses"].endswith("/actions/dispatch@v0"))
         self.assertEqual(dispatch["with"]["github-token"], "${{ secrets.SOLOFORGE_TOKEN || github.token }}")
         self.assertEqual(dispatch["with"]["auth-secret-token"], "${{ secrets.SOLOFORGE_AUTH_TOKEN }}")
         self.assertEqual(dispatch["with"]["timeout-minutes"], "30")
