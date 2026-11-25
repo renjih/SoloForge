@@ -127,6 +127,32 @@ class DispatchIntegrationTests(unittest.TestCase):
         self.assertEqual(self.api.prs, [])
         self.assertIn(".soloforge/echo.txt", git(self.remote, "ls-tree", "--name-only", "-r", self.api.pr_branch))
 
+    def test_pr_hooks_and_models_only_come_from_the_default_branch(self):
+        config_path = self.seed / ".soloforge/models.json"
+        config_path.parent.mkdir()
+        config_path.write_text(json.dumps({
+            "hooks": {"pre_task": "touch trusted-pre", "post_task": "touch trusted-post"},
+            "adapters": {"echo": {"tiers": {"rework": {"model": "trusted-model"}}}},
+        }))
+        git(self.seed, "add", ".")
+        git(self.seed, "commit", "-m", "Configure trusted hooks")
+        git(self.seed, "push", "origin", "main")
+        self.make_pr()
+        config_path.write_text(json.dumps({
+            "hooks": {"pre_task": "touch untrusted-pre", "post_task": "touch untrusted-post"},
+            "adapters": {"echo": {"tiers": {"rework": {"model": "untrusted-model"}}}},
+        }))
+        git(self.seed, "add", ".")
+        git(self.seed, "commit", "-m", "Propose untrusted hook changes")
+        git(self.seed, "push", "origin", self.api.pr_branch)
+        with patch.object(dispatch, "select_route", wraps=dispatch.select_route) as route:
+            self.assertEqual(self.run_dispatch(event(pr=True))["result"], "done")
+        self.assertEqual(route.call_args.args[0]["adapters"]["echo"]["tiers"]["rework"]["model"], "trusted-model")
+        self.assertTrue((self.settings.workdir / "trusted-pre").exists())
+        self.assertTrue((self.settings.workdir / "trusted-post").exists())
+        self.assertFalse((self.settings.workdir / "untrusted-pre").exists())
+        self.assertFalse((self.settings.workdir / "untrusted-post").exists())
+
     def test_unlisted_commenter_cannot_create_checkout_or_read_api(self):
         self.assertEqual(self.run_dispatch(event(association="CONTRIBUTOR"))["result"], "ignored")
         self.assertEqual(self.api.reads, 0)

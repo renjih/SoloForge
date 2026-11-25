@@ -97,8 +97,11 @@ Missing provider usage is reported as unavailable rather than as zero.
 
 The [default runtime configuration](../actions/dispatch/defaults/models.json)
 defines adapter routes, quota thresholds, and hooks. An optional
-`.soloforge/models.json` in the caller repository recursively overlays those
-defaults. A partial override can change one route without copying every tier:
+`.soloforge/models.json` from the caller repository's fetched default-branch
+commit recursively overlays those defaults. The entire configuration, including
+hooks and model routes, is read from that immutable commit even in PR mode;
+configuration proposed on the PR branch is not executed. A partial override can
+change one route without copying every tier:
 
 ```json
 {

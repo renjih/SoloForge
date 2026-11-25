@@ -242,12 +242,12 @@ def merge_config(base, override):
     return base
 
 
-def load_config(workdir, root):
+def load_config(workdir, root, git, ref):
     try:
         config = json.loads((root / "actions/dispatch/defaults/models.json").read_text(encoding="utf-8"))
-        path = workdir / ".soloforge/models.json"
-        if path.exists():
-            merge_config(config, json.loads(path.read_text(encoding="utf-8")))
+        path = ".soloforge/models.json"
+        if git.run("ls-tree", "--name-only", ref, "--", path, cwd=workdir):
+            merge_config(config, json.loads(git.run("show", ref + ":" + path, cwd=workdir)))
         return config
     except (OSError, ValueError, TypeError):
         raise DispatchError("Model configuration could not be loaded.") from None
@@ -415,6 +415,7 @@ def _dispatch(event, settings, github=None, clone_url=None):
         git.run("check-ref-format", "--branch", task["branch"])
         git.run("clone", "--no-tags", "--", clone_url or f"https://github.com/{settings.repository}.git",
                 str(settings.workdir), network=True)
+        trusted_config_ref = git.run("rev-parse", "--verify", "refs/remotes/origin/" + repo["default_branch"] + "^{commit}", cwd=settings.workdir)
         if task["mode"] == "pr":
             git.run("checkout", "-B", task["branch"], "origin/" + task["branch"], cwd=settings.workdir)
             if git.run("rev-parse", "HEAD", cwd=settings.workdir) != task["head_sha"]:
@@ -423,7 +424,7 @@ def _dispatch(event, settings, github=None, clone_url=None):
             git.run("checkout", "-b", task["branch"], "origin/" + repo["default_branch"], cwd=settings.workdir)
         git_config = settings.workdir / ".git/config"
         trusted_git_config = git_config.read_bytes()
-        config = load_config(settings.workdir, settings.action_root)
+        config = load_config(settings.workdir, settings.action_root, git, trusted_config_ref)
         route = select_route(config, task["adapter"], task["instruction"], task["mode"])
         env = adapter_environment(task, settings, temporary, route)
         prompt = ("Read AGENTS.md when present. Make changes and run the repository checks. "
