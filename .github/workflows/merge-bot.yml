@@ -128,7 +128,7 @@ jobs:
                 const hits = [];
                 const src = files.filter((f) => isSource(f.filename));
                 if ((o.newDirs || []).length) hits.push('New source directories: ' + o.newDirs.join(', '));
-                const saveRe = new RegExp(o.savePattern || '(save|schema|migration|\u5b58\u6863)', 'i');
+                const saveRe = new RegExp(o.savePattern || '(save|schema|migration)', 'i');
                 const saves = src.filter((f) => saveRe.test(f.filename)).map((f) => f.filename);
                 if (saves.length) hits.push('Save or schema changes: ' + saves.slice(0, 5).join(', '));
                 const shared = files.filter((f) => /^\.github\/workflows\//.test(f.filename) ||
@@ -155,8 +155,7 @@ jobs:
                 if (!Array.isArray(rules)) { out.errors.push(p + ' requires a rules array'); return out; }
                 const files = io.list();
                 const seen = new Set();
-                // Accept the previous marker in existing rule files.
-                const manual = new Set(['manual', '\u4eba\u5de5']);
+                const manual = new Set(['manual']);
                 for (const r of rules) {
                   const id = r && r.id;
                   if (!id || !r.rule) { out.errors.push('Rule is missing id or rule'); continue; }
@@ -267,6 +266,11 @@ jobs:
                 continue;
               }
 
+              if (pr.draft) {
+                log.push(`${tag}: Draft pull request is not ready to merge`);
+                continue;
+              }
+
               if (archMode !== 'off' && archBranch.test(pr.head.ref) && !['arch-ok', 'arch-veto', 'needs-arch'].some((label) => labels.includes(label))) {
                 try {
                   if (await archEnabled(pr.base.sha)) {
@@ -282,6 +286,7 @@ jobs:
                   }
                 } catch (error) {
                   log.push(`${tag}: Could not detect or report architecture changes: ${error.message}`);
+                  continue;
                 }
               }
 
@@ -289,7 +294,7 @@ jobs:
                 log.push(`${tag}: Waiting for P2 or P3`);
                 continue;
               }
-              const blocker = ['needs-owner', 'needs-author', 'needs-rebase', 'needs-arch', 'arch-veto'].find((label) => labels.includes(label));
+              const blocker = ['P0', 'P1', 'needs-owner', 'needs-author', 'needs-rebase', 'needs-arch', 'arch-veto'].find((label) => labels.includes(label));
               if (blocker) {
                 log.push(`${tag}: Blocked by ${blocker}`);
                 continue;
@@ -298,6 +303,10 @@ jobs:
               const { data: full } = await github.rest.pulls.get(pull);
               if (full.state !== 'open' || full.head.sha !== pr.head.sha) {
                 log.push(`${tag}: Pull request changed during this run. Check again next run.`);
+                continue;
+              }
+              if (full.draft) {
+                log.push(`${tag}: Draft pull request is not ready to merge`);
                 continue;
               }
               if (['behind', 'dirty'].includes(full.mergeable_state)) {

@@ -33,10 +33,10 @@ t('A new source directory is detected', () => {
 t('A new file in an existing directory passes', () => {
   assert.deepStrictEqual(g.detectHits([F('src/ui/new.js', 'added')], { newDirs: [] }), []);
 });
-t('Save file changes are detected', () => {
+t('Save and schema file changes are detected', () => {
   const hits = g.detectHits([F('src/core/save.js')], {});
   assert.ok(hits[0].startsWith('Save or schema changes:'));
-  assert.strictEqual(g.detectHits([F('src/core/\u5b58\u6863.js')], {}).length, 1);
+  assert.strictEqual(g.detectHits([F('src/core/schema.js')], {}).length, 1);
 });
 t('Save format tests and documentation pass', () => {
   assert.deepStrictEqual(g.detectHits([F('tests/save.test.js'), F('docs/save-format.md')], {}), []);
@@ -108,7 +108,7 @@ t('Manual rules are counted without evaluation', () => {
   const r = g.checkRules(io({ 'docs/arch-rules.json': rules([
     { id: 'A-04', rule: 'Document new systems before implementation' },
     { id: 'A-05', rule: 'Review public interfaces', check: 'manual' },
-    { id: 'A-06', rule: 'Review storage changes', check: '\u4eba\u5de5' },
+    { id: 'A-06', rule: 'Review storage changes', check: { type: 'manual' } },
   ]) }));
   assert.deepStrictEqual([r.manual, r.checked, r.violations.length, r.errors.length], [3, 0, 0, 0]);
 });
