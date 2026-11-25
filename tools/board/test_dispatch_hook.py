@@ -86,6 +86,42 @@ class DispatchHookTests(unittest.TestCase):
                     "SF_SUMMARY_FILE": str(self.summary), "SF_TASK_ID": "123", "SF_BRANCH": "task/example",
                     "SF_ISSUE": "7", "SF_ADAPTER": "echo", "GH_TOKEN": "test-token"}
 
+    def prepare_owner_card(self, answer=None):
+        remote = self.root / "remote.git"
+        git(self.root, "init", "--bare", "--initial-branch=main", str(remote))
+        git(self.work, "init", "--initial-branch=main")
+        (self.work / "task.txt").write_text("Task input\n")
+        git(self.work, "add", ".")
+        git(self.work, "commit", "-m", "Task input")
+        directory = repository.checkout(self.env["SF_REPOSITORY"], self.root / "seed-board",
+                                        "test-token", remote_url=str(remote))
+        env = {**os.environ, **self.env, "SOLOFORGE_OWNER": self.env["SF_OWNER"],
+               "BOARD_DIR": str(directory), "BOARD_REPO": "example-game"}
+        identifier = dispatch_hook.board(["new", "--title", "Inspect the task", "--status", "needs_owner",
+                                          "--kind", "inspect", "--question", "Inspect the result",
+                                          "--branch", self.env["SF_BRANCH"], "--next", "Wait for the owner"], env)
+        if answer:
+            dispatch_hook.board(["set", identifier, "--answer", answer, "--by", self.env["SF_OWNER"]], env)
+        dispatch_hook.board(["push", "-m", "Seed pending owner decision"], env)
+        original = json.loads((directory / "cards/example-game" / (identifier + ".json")).read_text())
+        return remote, original
+
+    def test_pre_preserves_pending_owner_decision_and_warns_the_adapter(self):
+        remote, original = self.prepare_owner_card()
+        real_checkout = repository.checkout
+        def local_checkout(repo, directory, token, **kwargs):
+            return real_checkout(repo, directory, token, remote_url=str(remote), **kwargs)
+        with patch.dict(os.environ, self.env), patch.object(dispatch_hook, "checkout", side_effect=local_checkout):
+            with patch.object(sys, "argv", [str(HERE / "dispatch_hook.py"), "pre"]):
+                self.assertEqual(dispatch_hook.main(), 0)
+        card = json.loads(git(remote, "show", "board:cards/example-game/" + original["id"] + ".json"))
+        self.assertEqual(card["status"], "needs_owner")
+        self.assertEqual(card["decision"], original["decision"])
+        self.assertEqual(card["history"][-1]["note"], "Dispatch started while an owner decision is pending")
+        self.assertIn("Repository example-game", self.instruction.read_text())
+        self.assertIn("This card is waiting for an owner decision; this dispatch does not count as an answer.",
+                      self.instruction.read_text())
+
     def test_pre_initializes_card_and_appends_context_outside_the_worktree(self):
         with patch.dict(os.environ, self.env), patch.object(dispatch_hook, "checkout") as clone:
             with patch.object(dispatch_hook, "board", side_effect=["example-card", "Board context", ""]) as call:
@@ -187,6 +223,50 @@ class DispatchHookTests(unittest.TestCase):
             self.assertEqual(card["status"], state, "The post hook must preserve a valid handoff state")
             self.assertEqual(card["next"], handoff["next"])
         self.assertEqual(git(remote, "rev-parse", "main"), baseline)
+
+    def test_post_updates_handoff_while_owner_decision_remains_pending(self):
+        remote, original = self.prepare_owner_card()
+        real_checkout = repository.checkout
+        def local_checkout(repo, directory, token, **kwargs):
+            return real_checkout(repo, directory, token, remote_url=str(remote), **kwargs)
+        with patch.dict(os.environ, self.env), patch.object(dispatch_hook, "checkout", side_effect=local_checkout):
+            dispatch_hook.run("pre")
+        (self.work / "task.txt").write_text("Task implementation\n")
+        handoff = {"id": original["id"], "status": "in_progress", "today": "Prepared implementation",
+                   "state": "Project checks passed", "next": "Wait for the recorded owner decision"}
+        self.summary.write_text("Implemented the task.\n```board\n" + json.dumps(handoff) + "\n```\n")
+        for result in ("done", "paused", "failed"):
+            with self.subTest(result=result):
+                with patch.dict(os.environ, {**self.env, "SF_RESULT": result,
+                                             "SF_PR_URL": "https://github.com/example-maintainer/example-game/pull/8"}):
+                    with patch.object(dispatch_hook, "checkout", side_effect=local_checkout):
+                        with patch.object(sys, "argv", [str(HERE / "dispatch_hook.py"), "post"]):
+                            self.assertEqual(dispatch_hook.main(), 0)
+                card = json.loads(git(remote, "show", "board:cards/example-game/" + original["id"] + ".json"))
+                self.assertEqual(card["status"], "needs_owner")
+                self.assertEqual(card["decision"], original["decision"])
+                self.assertEqual(card["today"], handoff["today"])
+                self.assertEqual(card["state"], handoff["state"])
+                self.assertEqual(card["files"], ["task.txt"])
+                self.assertEqual(card["pr"], 8)
+                if result == "done":
+                    self.assertEqual(card["next"], handoff["next"])
+                else:
+                    self.assertEqual(card["blocker"]["what"], "Dispatcher " + result)
+                self.assertFalse(any("Invalid task handoff" in item["note"] for item in card["history"]))
+
+    def test_pre_resumes_owner_card_after_an_answer(self):
+        remote, original = self.prepare_owner_card("Approved the follow-up")
+        real_checkout = repository.checkout
+        def local_checkout(repo, directory, token, **kwargs):
+            return real_checkout(repo, directory, token, remote_url=str(remote), **kwargs)
+        with patch.dict(os.environ, self.env), patch.object(dispatch_hook, "checkout", side_effect=local_checkout):
+            with patch.object(sys, "argv", [str(HERE / "dispatch_hook.py"), "pre"]):
+                self.assertEqual(dispatch_hook.main(), 0)
+        card = json.loads(git(remote, "show", "board:cards/example-game/" + original["id"] + ".json"))
+        self.assertEqual(card["status"], "in_progress")
+        self.assertEqual(card["decision"], original["decision"])
+        self.assertNotIn("this dispatch does not count as an answer", self.instruction.read_text())
 
 
 if __name__ == "__main__":

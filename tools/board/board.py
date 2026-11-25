@@ -753,6 +753,7 @@ def cmd_task_finish(arguments):
         card = next((item for item in all_cards() if item.get("repo") == session["repo"]
                      and item.get("branch") == branch and item.get("status") not in ("done", None)), None)
     original = copy.deepcopy(card)
+    pending_owner = card is not None and card.get("status") == "needs_owner" and not (card.get("decision") or {}).get("answer")
     if card is None and not block and not files and arguments.result not in ("paused", "failed"):
         print("No changed files or board block; no fallback card needed")
         return 0
@@ -771,7 +772,7 @@ def cmd_task_finish(arguments):
         status = "in_progress"
     if status == "blocked":
         card["blocker"] = {"what": block.get("blocker") or "", "ruled_out": block.get("ruled_out") or []}
-    if status == "needs_owner":
+    if status == "needs_owner" and not pending_owner:
         kind = block.get("kind", "decide")
         tier = block.get("tier", "default_after_48h" if kind == "decide" else "wait_for_owner")
         card["decision"] = {"kind": kind, "question": block.get("question") or "", "options": block.get("options") or [],
@@ -787,6 +788,8 @@ def cmd_task_finish(arguments):
     elif arguments.result == "publication_unknown":
         status = "in_progress"
         card["next"] = "Inspect the remote branch and pull request before resuming"
+    if pending_owner:
+        status = "needs_owner"
     card["next"] = card.get("next") or "Review the branch and attached PR"
     if fallback:
         card.update(auto=True, today=strip_board_block(text).strip()[:600] or "Summary did not contain a board block")

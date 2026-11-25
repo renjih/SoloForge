@@ -51,9 +51,15 @@ def _run(mode, gh_config_dir):
                       for path in (directory / "cards" / env["BOARD_REPO"]).glob("*.json")]
         candidates = [card for card in candidates if card.get("branch") == env["SF_BRANCH"] and card.get("status") != "done"]
         next_step = "Implement the authorized instruction and run project checks."
+        pending_owner = False
         if candidates:
-            card_id = max(candidates, key=lambda card: card.get("updated_at", ""))["id"]
-            board(["set", card_id, "--status", "in_progress", "--next", next_step, "--by", agent], env)
+            card = max(candidates, key=lambda card: card.get("updated_at", ""))
+            card_id = card["id"]
+            pending_owner = card.get("status") == "needs_owner" and not (card.get("decision") or {}).get("answer")
+            if pending_owner:
+                board(["set", card_id, "--note", "Dispatch started while an owner decision is pending", "--by", agent], env)
+            else:
+                board(["set", card_id, "--status", "in_progress", "--next", next_step, "--by", agent], env)
         else:
             card_id = board(["new", "--repo", env["BOARD_REPO"], "--title", "Dispatch issue " + env["SF_ISSUE"],
                              "--status", "in_progress", "--assignee", agent, "--branch", env["SF_BRANCH"], "--by", agent,
@@ -62,6 +68,8 @@ def _run(mode, gh_config_dir):
         context = board(["task-start", "--session", env["SF_TASK_ID"], "--agent", agent], env)
         with Path(env["SF_INSTRUCTION_FILE"]).open("a", encoding="utf-8") as stream:
             stream.write("\n\n" + context + "\n\nUpdate dispatch card " + card_id + " in your handoff.\n")
+            if pending_owner:
+                stream.write("This card is waiting for an owner decision; this dispatch does not count as an answer.\n")
         board(["push", "-m", "board: dispatch started"], env)
     elif mode == "post":
         if not state_path.is_file():
