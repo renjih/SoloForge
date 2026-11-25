@@ -71,8 +71,23 @@ The Action provides configurable per-task limits:
 | Action input | Default | Enforcement |
 | --- | --- | --- |
 | `timeout-minutes` | `30` | Stops the adapter process and its descendants after the configured execution time. |
-| `max-turns` | `8` | Limits observed turns or completed work items; Claude also receives its native turn limit. |
-| `max-tokens` | `16000` | Stops when reported input plus output token usage reaches the configured budget. |
+| `max-turns` | `21` | Limits observed turns or completed work items; Claude also receives its native turn limit. |
+| `max-tokens` | `244000` | Stops when reported input plus output token usage reaches the configured budget. |
+
+On 2026-11-25, one real `codex exec --json` invocation changed `value.py` from
+`VALUE = 1` to `VALUE = 2` and ran `python check.py` successfully. Codex CLI
+`0.171.0-alpha.13.2`, medium effort, and the provider CLI default model were used
+on Windows PowerShell, with user configuration and rules disabled. The JSON
+stream did not emit a model ID. The run completed **7 items** in **19.3 seconds**
+and reported **80,938 input tokens**, including **74,240 cached input tokens**,
+plus **309 output tokens**: **81,247 total reported tokens**. The 21-item default
+is exactly three times the observation; 244,000 tokens rounds three times the
+reported total (243,741) up to the next thousand. Cached input is already part of
+the input total and is not added again. See the [sanitized benchmark record](benchmarks/codex-small-task.json).
+
+This is one small-task calibration, not a cost guarantee across models, projects,
+CLI versions, or operating systems. Claude was **not benchmarked** because no
+`ANTHROPIC_API_KEY` was supplied; the shared defaults are provisional for Claude.
 
 These inputs become `SF_TIMEOUT_MINUTES`, `SF_MAX_TURNS`, and `SF_MAX_TOKENS` in
 the adapter environment. Claude exposes conversation turns; Codex supervision
@@ -92,6 +107,9 @@ At the end of an authorized task attempt, the dispatcher posts its outcome,
 observed rounds, and elapsed time, including failure, quota pause, and timeout.
 Execution-time or usage exhaustion stops the task without publishing its changes.
 Missing provider usage is reported as unavailable rather than as zero.
+Pause comments distinguish insufficient provider quota from an exhausted execution
+budget. A third-party adapter returning `75` without a reason is reported as an
+unclassified adapter pause rather than being mislabeled as quota exhaustion.
 
 Reservations count only when posted by an account with current repository write,
 maintain, or admin permission, or by the authenticated bot itself. Bot identity

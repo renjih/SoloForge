@@ -31,10 +31,10 @@ inputs:
     default: "30"
   max-turns:
     description: Maximum observed adapter turns or completed work items per task.
-    default: "8"
+    default: "21"
   max-tokens:
     description: Stop when provider-reported input and output tokens reach this task budget.
-    default: "16000"
+    default: "244000"
 
 outputs:
   result:

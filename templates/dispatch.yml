@@ -43,8 +43,8 @@ jobs:
           post_task: ""
           auth-secret-token: ${{ secrets.SOLOFORGE_AUTH_TOKEN }}
           timeout-minutes: "30"
-          max-turns: "8"
-          max-tokens: "16000"
+          max-turns: "21"
+          max-tokens: "244000"
         env:
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

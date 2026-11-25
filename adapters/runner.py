@@ -96,6 +96,12 @@ def write_metrics(metrics):
         temporary.replace(target)
 
 
+def write_pause_reason(reason):
+    path = os.environ.get("SF_PAUSE_REASON_FILE")
+    if path:
+        private_write(path, reason + "\n")
+
+
 def usage_tokens(usage, provider):
     if not isinstance(usage, dict):
         return None
@@ -266,14 +272,16 @@ def run_adapter(provider):
         raise AdapterError("invalid_adapter_path")
     model = os.environ.get("SF_MODEL", "")
     effort = os.environ.get("SF_EFFORT", "")
-    max_turns = positive_limit("SF_MAX_TURNS", 8)
-    max_tokens = positive_limit("SF_MAX_TOKENS", 16000)
+    max_turns = positive_limit("SF_MAX_TURNS", 21)
+    max_tokens = positive_limit("SF_MAX_TOKENS", 244000)
     timeout_seconds = timeout_budget()
     prompt = instruction.read_text(encoding="utf-8")
     if provider == "echo":
         code = int(os.environ.get("SF_ECHO_EXIT", "0"))
         private_write(log, f"Echo adapter exit: {code}\n")
         write_metrics({"turns": 0 if code else 1, "tokens": 0})
+        if code == 75:
+            write_pause_reason("budget" if os.environ.get("SF_ECHO_PAUSE_REASON") == "budget" else "quota")
         if code:
             return code
         output = workdir / ".soloforge/echo.txt"
@@ -308,13 +316,17 @@ def run_adapter(provider):
     if not getattr(result, "log_written", False):
         private_write(log, result.stdout + ("\n" + result.stderr if result.stderr else ""))
     if getattr(result, "budget_exhausted", False):
+        write_pause_reason("budget")
         return 75
     if provider == "codex":
         if result.returncode == 0:
             if not summary.exists():
                 private_write(summary, "Codex completed without a final summary.\n")
             return 0
-        return 75 if quota_failure(result.stdout + "\n" + result.stderr) else 1
+        if quota_failure(result.stdout + "\n" + result.stderr):
+            write_pause_reason("quota")
+            return 75
+        return 1
 
     payload = None
     for line in result.stdout.splitlines():
@@ -327,10 +339,17 @@ def run_adapter(provider):
     if payload is None:
         return 1
     if payload.get("subtype") in ("error_max_turns", "error_max_budget_usd") or payload.get("terminal_reason") == "max_turns":
+        write_pause_reason("budget")
         return 75
     if result.returncode or payload.get("is_error"):
         diagnostics = " ".join(str(payload.get(key, "")) for key in ("subtype", "error", "errors", "result"))
-        return 75 if re.search(r"(?:usage|rate)[ _-]+limit|quota[ _-]+exceeded|error_max_budget", diagnostics, re.I) else 1
+        if re.search(r"error_max_budget", diagnostics, re.I):
+            write_pause_reason("budget")
+            return 75
+        if re.search(r"(?:usage|rate)[ _-]+limit|quota[ _-]+exceeded", diagnostics, re.I):
+            write_pause_reason("quota")
+            return 75
+        return 1
     if not isinstance(payload.get("result"), str):
         return 1
     private_write(summary, payload["result"].rstrip() + "\n")

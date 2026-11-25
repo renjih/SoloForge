@@ -13,8 +13,9 @@ The adapter only implements the task and writes its summary.
 | `SF_SUMMARY_FILE` | Private UTF-8 file to write with the final task summary. |
 | `SF_LOG_FILE` | Private file to write with provider execution diagnostics. |
 | `SF_METRICS_FILE` | Dispatcher-supplied private JSON file for observed `turns` and `tokens`. |
-| `SF_MAX_TURNS` | Positive execution-step limit; defaults to `8`. |
-| `SF_MAX_TOKENS` | Positive reported-token threshold; defaults to `16000`. |
+| `SF_MAX_TURNS` | Positive execution-step limit; defaults to `21`. |
+| `SF_MAX_TOKENS` | Positive reported-token threshold; defaults to `244000`. |
+| `SF_PAUSE_REASON_FILE` | Optional dispatcher-supplied file; write `quota` or `budget` before returning `75`. |
 | `SF_TIMEOUT_MINUTES` | Positive provider deadline in minutes; defaults to `30`. |
 
 Return `0` for success, `75` when quota or usage limits require a pause, and any
@@ -28,6 +29,21 @@ The included adapters make one provider invocation and never retry automatically
 Reaching an observed step/token limit or deadline terminates the provider process
 tree and returns `75`; the dispatcher pauses without publishing partial work.
 The dispatcher also enforces its own elapsed-time deadline.
+
+Defaults were calibrated with one real Codex run on 2026-11-25: changing one file
+and passing `python check.py` took 7 completed items, 19.3 seconds, and 81,247
+reported tokens (80,938 input, including 74,240 cached, plus 309 output). The
+defaults are three times the item count and approximately three times that token
+total: 21 items and 244,000 tokens. See the
+[measurement method and limitations](../docs/dispatcher.md#cost-controls) and
+[sanitized record](../docs/benchmarks/codex-small-task.json). Claude was not
+benchmarked because no API key was supplied; these shared limits are provisional
+for Claude and remain configurable.
+
+The included adapters classify `75` pauses as `quota` for provider usage limits
+or `budget` for local time/item/token limits and native turn/budget caps. The
+dispatcher uses this reason in its pause comments. Third-party adapters can omit
+the reason file, in which case the comment states that the reason is unclassified.
 
 Claude receives the supported native `--max-turns` option. Its streaming assistant
 messages are counted, and a native `error_max_turns` result is a pause. Codex exec

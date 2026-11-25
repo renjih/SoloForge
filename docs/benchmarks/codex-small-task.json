@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-25",
+  "cli_version": "0.171.0-alpha.13.2",
+  "platform": "Windows PowerShell",
+  "model": "provider CLI default; model ID not emitted in the JSON event stream",
+  "effort": "medium",
+  "task": "Change value.py from VALUE = 1 to VALUE = 2 and run python check.py",
+  "changed_files": ["value.py"],
+  "check_passed": true,
+  "exit_code": 0,
+  "duration_seconds": 19.3,
+  "completed_items": 7,
+  "input_tokens": 80938,
+  "cached_input_tokens": 74240,
+  "output_tokens": 309,
+  "total_reported_tokens": 81247,
+  "default_max_turns": 21,
+  "default_max_tokens": 244000,
+  "claude_measured": false,
+  "claude_note": "No ANTHROPIC_API_KEY was supplied."
+}

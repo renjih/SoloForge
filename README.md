@@ -4,7 +4,7 @@ Soloforge provides reusable GitHub Actions workflows and project rules for teams
 
 API key usage is billed by your AI provider. Set a monthly spending cap in the
 provider dashboard before enabling dispatch. Tasks default to a 30-minute timeout,
-8 observed turns or work items, and 16,000 reported tokens; see the
+21 observed turns or work items, and 244,000 reported tokens; see the
 [cost controls and their limits](docs/dispatcher.md#cost-controls).
 
 ## Set up project CI

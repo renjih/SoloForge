@@ -290,6 +290,14 @@ class DispatchIntegrationTests(unittest.TestCase):
         self.assertEqual(self.api.prs, [])
         self.assertFalse(self.api.branch_exists("soloforge/issue-7-comment-123"))
 
+    def test_pause_comments_distinguish_provider_quota_and_execution_budget(self):
+        for reason, expected in (("quota", "Provider quota is insufficient"), ("budget", "execution budget limit")):
+            self.settings.workdir = self.root / reason
+            with patch.dict(os.environ, {"SF_ECHO_EXIT": "75", "SF_ECHO_PAUSE_REASON": reason}):
+                self.assertEqual(self.run_dispatch()["result"], "paused")
+            self.assertIn(expected, self.api.comments[-1][1])
+        self.assertEqual(self.api.prs, [])
+
     def test_repeated_issue_comment_does_not_overwrite_its_branch(self):
         self.run_dispatch()
         self.settings.workdir = self.root / "retry"
@@ -321,6 +329,15 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(route["tier"], tier)
         self.assertEqual(dispatch.select_route(self.config, "echo", "Use Tier: ultra please", "issue")["tier"], "normal")
         self.assertEqual(dispatch.select_route(self.config, "echo", "Update it", "pr")["tier"], "rework")
+
+    def test_default_budgets_are_about_three_times_the_recorded_real_run(self):
+        record = json.loads((dispatch.ROOT / "docs/benchmarks/codex-small-task.json").read_text())
+        settings = dispatch.Settings(REPOSITORY, "test-token", Path("unused"))
+        self.assertTrue(record["check_passed"])
+        self.assertEqual(record["total_reported_tokens"], record["input_tokens"] + record["output_tokens"])
+        self.assertEqual(settings.max_turns, 3 * record["completed_items"])
+        self.assertLessEqual(3 * record["total_reported_tokens"], settings.max_tokens)
+        self.assertLess(settings.max_tokens, 3 * record["total_reported_tokens"] + 1000)
 
     def test_repository_override_merges_over_defaults(self):
         combined = dispatch.merge_config(copy.deepcopy(self.config), {"adapters": {"echo": {

@@ -110,9 +110,10 @@ class Settings:
     auth_secret_token: str = ""
     action_root: Path = ROOT
     timeout_minutes: float = 30
-    max_turns: int = 8
-    max_tokens: int = 16000
+    max_turns: int = 21
+    max_tokens: int = 244000
     metrics_file: Path | None = None
+    pause_reason: str = ""
     publication_started: bool = False
     publication_branch: str = ""
     publication_url: str = ""
@@ -352,6 +353,7 @@ def adapter_environment(task, settings, temporary, route):
                SF_ACTION_ROOT=str(settings.action_root), SF_MODEL=route["model"], SF_EFFORT=route["effort"],
                SF_TIER=route["tier"], SF_INSTRUCTION_FILE=str(temporary / "instruction.md"),
                SF_SUMMARY_FILE=str(temporary / "summary.md"), SF_LOG_FILE=str(temporary / "adapter.log"))
+    env["SF_PAUSE_REASON_FILE"] = str(temporary / "pause-reason.txt")
     env.update(SF_MAX_TURNS=str(settings.max_turns), SF_MAX_TOKENS=str(settings.max_tokens),
                SF_METRICS_FILE=str(settings.metrics_file or temporary / "metrics.json"))
     if task["adapter"] == "codex":
@@ -362,6 +364,8 @@ def adapter_environment(task, settings, temporary, route):
         env["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]
     elif task["adapter"] == "echo" and os.environ.get("SF_ECHO_EXIT"):
         env["SF_ECHO_EXIT"] = os.environ["SF_ECHO_EXIT"]
+        if os.environ.get("SF_ECHO_PAUSE_REASON"):
+            env["SF_ECHO_PAUSE_REASON"] = os.environ["SF_ECHO_PAUSE_REASON"]
     return env
 
 
@@ -483,7 +487,11 @@ def _dispatch(event, settings, github=None, clone_url=None):
                 reconcile_auth(settings, auth_path, original_auth, secrets)
             if code == 75:
                 result = "paused"
-                github.comment(task["number"], "SoloForge paused because adapter quota is insufficient. No changes were committed or pushed.")
+                reason = Path(env["SF_PAUSE_REASON_FILE"])
+                supplied = reason.read_text(encoding="utf-8").strip() if reason.is_file() else "adapter"
+                settings.pause_reason = "quota" if decision == "pause" else supplied if supplied in ("quota", "budget") else "adapter"
+                github.comment(task["number"], "SoloForge paused: " + pause_description(settings.pause_reason)
+                               + " No changes were committed or pushed.")
             elif code:
                 raise DispatchError("The adapter failed. No changes were published.")
             else:
@@ -567,6 +575,12 @@ def reserve_attempt(github, number):
     return True
 
 
+def pause_description(reason):
+    return {"quota": "Provider quota is insufficient.",
+            "budget": "The execution budget limit was reached (time, items, or tokens)."}.get(
+                reason, "The adapter requested a pause without a classified reason.")
+
+
 def dispatch(event, settings, github=None, clone_url=None):
     settings.validate()
     task = authorized_task(event, settings)
@@ -576,6 +590,7 @@ def dispatch(event, settings, github=None, clone_url=None):
     start = time.monotonic()
     settings.publication_started = False
     settings.publication_branch = settings.publication_url = ""
+    settings.pause_reason = ""
     outcome = {"result": "failed", "branch": "", "pr_url": ""}
     with tempfile.TemporaryDirectory(prefix="soloforge-metrics-") as directory:
         settings.metrics_file = Path(directory) / "metrics.json"
@@ -588,6 +603,7 @@ def dispatch(event, settings, github=None, clone_url=None):
                 outcome = _dispatch(event, settings, github, clone_url)
             return outcome
         except DispatchTimeout:
+            settings.pause_reason = "budget"
             outcome.update(result="publication_unknown" if settings.publication_started else "paused",
                            branch=settings.publication_branch, pr_url=settings.publication_url)
             return outcome
@@ -606,7 +622,7 @@ def dispatch(event, settings, github=None, clone_url=None):
                       if outcome["result"] == "rate_limited" else
                       " The task timed out during publication; inspect the remote branch before dispatching again."
                       if outcome["result"] == "publication_unknown" else
-                      " The configured task time or adapter budget was exhausted." if outcome["result"] == "paused" else "")
+                      " " + pause_description(settings.pause_reason) if outcome["result"] == "paused" else "")
             github.comment(task["number"], "<!-- soloforge:result:v1 -->\n"
                            f"SoloForge result: {outcome['result']}.{detail}\n\n"
                            f"Rounds: {turns}. Tokens: {tokens}. Duration: {time.monotonic() - start:.1f} seconds.")
@@ -625,8 +641,8 @@ def main():
                             pre_task=os.environ.get("SF_PRE_TASK", ""), post_task=os.environ.get("SF_POST_TASK", ""),
                             auth_secret_token=os.environ.get("SF_AUTH_SECRET_TOKEN", ""),
                             timeout_minutes=float(os.environ.get("SF_TIMEOUT_MINUTES", "30")),
-                            max_turns=int(os.environ.get("SF_MAX_TURNS", "8")),
-                            max_tokens=int(os.environ.get("SF_MAX_TOKENS", "16000")))
+                            max_turns=int(os.environ.get("SF_MAX_TURNS", "21")),
+                            max_tokens=int(os.environ.get("SF_MAX_TOKENS", "244000")))
         outcome = dispatch(event, settings)
         if os.environ.get("GITHUB_OUTPUT"):
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:

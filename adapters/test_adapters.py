@@ -29,6 +29,7 @@ class AdapterTests(unittest.TestCase):
         self.env = {
             "SF_WORKDIR": str(self.work), "SF_INSTRUCTION_FILE": str(self.instruction),
             "SF_SUMMARY_FILE": str(self.root / "summary.md"), "SF_LOG_FILE": str(self.root / "run.log"),
+            "SF_PAUSE_REASON_FILE": str(self.root / "pause-reason.txt"),
             "SF_MODEL": "", "SF_EFFORT": "high", "OPENAI_API_KEY": "example-key",
             "ANTHROPIC_API_KEY": "example-key", "GH_TOKEN": "publication-token",
             "GITHUB_TOKEN": "publication-token", "CODEX_AUTH_JSON": "private-login-data",
@@ -135,7 +136,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(Path(self.env["SF_SUMMARY_FILE"]).read_text(), "Implemented the requested changes.\n")
         self.assertNotIn("OPENAI_API_KEY", set(run.call_args.kwargs["env"]))
         self.assertIn("--effort", run.call_args.args[0])
-        self.assertEqual(run.call_args.args[0][run.call_args.args[0].index("--max-turns") + 1], "8")
+        self.assertEqual(run.call_args.args[0][run.call_args.args[0].index("--max-turns") + 1], "21")
         self.assertIn("stream-json", run.call_args.args[0])
         for payload, expected in (
             ({"is_error": True, "result": "rate limit reached"}, 75),
@@ -155,6 +156,16 @@ class AdapterTests(unittest.TestCase):
         ):
             code, _ = self.invoke("claude", subprocess.CompletedProcess([], 0, json.dumps(payload), ""))
             self.assertEqual(code, 75)
+            self.assertEqual(Path(self.env["SF_PAUSE_REASON_FILE"]).read_text().strip(), "budget")
+
+    def test_quota_and_supervisor_budget_pauses_have_distinct_reason_files(self):
+        quota = subprocess.CompletedProcess([], 1, json.dumps({"type": "error", "message": "usage limit reached"}), "")
+        self.assertEqual(self.invoke("codex", quota)[0], 75)
+        self.assertEqual(Path(self.env["SF_PAUSE_REASON_FILE"]).read_text().strip(), "quota")
+        budget = subprocess.CompletedProcess([], 75, "", "")
+        budget.budget_exhausted = True
+        self.assertEqual(self.invoke("codex", budget)[0], 75)
+        self.assertEqual(Path(self.env["SF_PAUSE_REASON_FILE"]).read_text().strip(), "budget")
 
     def test_limits_are_configurable_and_invalid_budgets_fail_before_provider(self):
         self.env.update(SF_MAX_TURNS="3", SF_MAX_TOKENS="4000", SF_TIMEOUT_MINUTES="2")

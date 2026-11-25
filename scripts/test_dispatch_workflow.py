@@ -52,7 +52,7 @@ class DispatchWorkflowTests(unittest.TestCase):
         self.assertEqual(json.loads(inputs["allowed-associations"]["default"]), ["OWNER"])
         for name in ("pre_task", "post_task", "auth-secret-token"):
             self.assertEqual(inputs[name]["default"], "")
-        for name, default in (("timeout-minutes", "30"), ("max-turns", "8"), ("max-tokens", "16000")):
+        for name, default in (("timeout-minutes", "30"), ("max-turns", "21"), ("max-tokens", "244000")):
             self.assertEqual(inputs[name]["default"], default)
         self.assertEqual(set(self.action["outputs"]), {"result", "branch", "pr_url"})
         for name, output in self.action["outputs"].items():
@@ -90,8 +90,8 @@ class DispatchWorkflowTests(unittest.TestCase):
         self.assertEqual(dispatch["with"]["github-token"], "${{ secrets.SOLOFORGE_TOKEN || github.token }}")
         self.assertEqual(dispatch["with"]["auth-secret-token"], "${{ secrets.SOLOFORGE_AUTH_TOKEN }}")
         self.assertEqual(dispatch["with"]["timeout-minutes"], "30")
-        self.assertEqual(dispatch["with"]["max-turns"], "8")
-        self.assertEqual(dispatch["with"]["max-tokens"], "16000")
+        self.assertEqual(dispatch["with"]["max-turns"], "21")
+        self.assertEqual(dispatch["with"]["max-tokens"], "244000")
         self.assertEqual(dispatch["env"], {
             "CODEX_AUTH_JSON": "${{ secrets.CODEX_AUTH_JSON }}",
             "OPENAI_API_KEY": "${{ secrets.OPENAI_API_KEY }}",
