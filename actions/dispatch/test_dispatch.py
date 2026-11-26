@@ -487,6 +487,58 @@ PY
             self.assertEqual(self.run_dispatch()["result"], "paused")
         self.assertEqual((self.settings.workdir / "hook-result").read_text(), "paused")
 
+    def run_with_summary(self, summary):
+        action = self.root / "action"
+        entry = action / "adapters/echo/run"
+        entry.parent.mkdir(parents=True)
+        entry.write_text(
+            '#!/usr/bin/env bash\nset -eu\nprintf "value = 42\\n" > calc.py\n'
+            'cp "$(dirname -- "$0")/summary.md" "$SF_SUMMARY_FILE"\n',
+            encoding="utf-8",
+        )
+        entry.chmod(0o755)
+        entry.with_name("summary.md").write_text(summary, encoding="utf-8")
+        defaults = action / "actions/dispatch/defaults/models.json"
+        defaults.parent.mkdir(parents=True)
+        shutil.copyfile(HERE / "defaults/models.json", defaults)
+        self.settings.action_root = action
+        self.settings.post_task = 'cp "$SF_SUMMARY_FILE" raw-summary.md'
+        github = dispatch.GitHub(self.settings)
+        with patch.object(github, "api", return_value={"html_url": f"https://github.com/{REPOSITORY}/pull/8"}) as request:
+            with patch.object(self.api, "open_pr", side_effect=github.open_pr):
+                outcome = self.run_dispatch()
+        return outcome, request.call_args.args[1]["body"]
+
+    def test_published_summary_strips_board_blocks_and_workdir_but_post_hook_gets_original(self):
+        absolute_link = f"{self.settings.workdir.resolve()}{os.sep}calc.py:8"
+        board = "```board\n" + json.dumps({"today": "Updated the calculation. " + "x" * 4100}) + "\n```\n"
+        remaining = "\nThe calculation now uses a constant.\n\n```python\nvalue = 42\n```"
+        raw = (
+            f"Updated [calc.py]({absolute_link}).\n\n \t\n{board}{remaining}\n\n"
+            '~~~board\n{"today":"Updated the calculation."}\n~~~\n'
+        )
+        expected = "Updated [calc.py](calc.py:8).\n" + remaining
+
+        outcome, pr_body = self.run_with_summary(raw)
+
+        self.assertEqual(outcome["result"], "done")
+        self.assertEqual(pr_body, "Closes #7\n\n" + expected)
+        self.assertIn(
+            (7, "SoloForge completed the task.\n\n" + expected + "\n\n" + outcome["pr_url"]),
+            self.api.comments,
+        )
+        self.assertEqual((self.settings.workdir / "raw-summary.md").read_text(encoding="utf-8"), raw)
+
+    def test_board_only_summary_uses_completion_fallback(self):
+        outcome, pr_body = self.run_with_summary('```board\n{"today":"Updated the calculation."}\n```\n')
+
+        self.assertEqual(outcome["result"], "done")
+        self.assertEqual(pr_body, "Closes #7\n\nTask completed.")
+        self.assertIn(
+            (7, "SoloForge completed the task.\n\nTask completed.\n\n" + outcome["pr_url"]),
+            self.api.comments,
+        )
+
 
 class PolicyTests(unittest.TestCase):
     def setUp(self):

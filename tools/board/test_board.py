@@ -187,7 +187,9 @@ class BoardTest(unittest.TestCase):
 
     def test_codex_start_finish(self):
         self.hook("start")
-        self.assertIn("fenced `board`", self.b("codex-start", "--session", "task-one").stdout)
+        guidance = self.b("codex-start", "--session", "task-one").stdout
+        self.assertIn("fenced `board`", guidance)
+        self.assertIn("Write one sentence in today describing the work done on this task. Omit dates.", guidance)
         (self.game / "b.txt").write_text("change\n")
         self.g(self.game, "add", "b.txt")
         self.g(self.game, "commit", "-m", "Add example")

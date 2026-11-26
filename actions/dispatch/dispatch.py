@@ -348,9 +348,36 @@ def redact_secrets(text, secrets):
     return text
 
 
-def safe_summary(path, secrets):
+def strip_board_blocks(text):
+    public_lines = []
+    fence = ""
+    board = False
+    for line in text.splitlines(keepends=True):
+        match = re.match(r" {0,3}(`{3,}|~{3,})([^\n]*)", line)
+        if match:
+            marker, info = match.groups()
+            info = info.strip()
+            if fence:
+                if marker.startswith(fence) and not info:
+                    fence = ""
+                    if board:
+                        board = False
+                        continue
+            elif marker.startswith("~") or "`" not in info:
+                fence = marker
+                board = info == "board"
+                if board:
+                    while public_lines and not public_lines[-1].strip():
+                        public_lines.pop()
+        if not board:
+            public_lines.append(line)
+    return "".join(public_lines)
+
+
+def safe_summary(path, secrets, workdir):
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else "Task completed."
     text = redact_secrets(text, secrets)
+    text = strip_board_blocks(text).replace(f"{workdir}{os.sep}", "")
     return text[:4000].strip() or "Task completed."
 
 
@@ -626,7 +653,7 @@ def _dispatch(event, settings, github=None, clone_url=None):
                     settings.publication_branch = task["branch"]
                     settings.publication_url = pr_url
                     git.run("push", "origin", "HEAD:refs/heads/" + task["branch"], cwd=settings.workdir, network=True)
-                    summary = safe_summary(Path(env["SF_SUMMARY_FILE"]), secrets)
+                    summary = safe_summary(Path(env["SF_SUMMARY_FILE"]), secrets, settings.workdir)
                     if task["mode"] == "issue":
                         pr_url = github.open_pr(task["branch"], repo["default_branch"], task["number"], summary)
                         settings.publication_url = pr_url
