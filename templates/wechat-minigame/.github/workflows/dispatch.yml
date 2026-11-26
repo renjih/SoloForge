@@ -32,7 +32,7 @@ jobs:
       - name: Install adapter command line tools
         run: npm install --global @openai/codex @anthropic-ai/claude-code
       - name: Dispatch task
-        uses: renjih/SoloForge/actions/dispatch@main
+        uses: renjih/SoloForge/actions/dispatch@v0
         with:
           github-token: ${{ secrets.SOLOFORGE_TOKEN || github.token }}
           repository: ${{ github.repository }}

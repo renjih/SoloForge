@@ -27,8 +27,8 @@ class TemplateWorkflowTests(unittest.TestCase):
         gate = self.ci["jobs"]["gate"]
         merge = self.ci["jobs"]["merge"]
         self.assertTrue(namespace.endswith("/SoloForge"))
-        self.assertEqual(gate["uses"], namespace + "/.github/workflows/gate.yml@main")
-        self.assertEqual(merge["uses"], namespace + "/.github/workflows/merge-bot.yml@main")
+        self.assertEqual(gate["uses"], namespace + "/.github/workflows/gate.yml@v0")
+        self.assertEqual(merge["uses"], namespace + "/.github/workflows/merge-bot.yml@v0")
         self.assertEqual(gate["permissions"], {"contents": "read", "pull-requests": "write"})
         self.assertEqual(gate["with"], {"stack": "node", "check": "npm run check"})
         self.assertEqual(merge["permissions"], {})

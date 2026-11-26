@@ -20,7 +20,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: renjih/SoloForge/.github/workflows/gate.yml@main
+    uses: renjih/SoloForge/.github/workflows/gate.yml@v0
     with:
       stack: node
       check: npm run check
@@ -32,6 +32,6 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name)
     needs: [gate]
     permissions: {}
-    uses: renjih/SoloForge/.github/workflows/merge-bot.yml@main
+    uses: renjih/SoloForge/.github/workflows/merge-bot.yml@v0
     secrets:
       token: ${{ secrets.SOLOFORGE_TOKEN }}
