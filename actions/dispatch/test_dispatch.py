@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 import subprocess
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -251,6 +252,39 @@ class DispatchIntegrationTests(unittest.TestCase):
         self.assertTrue(self.api.branch_exists(outcome["branch"]))
         self.assertEqual(git(diverted, "for-each-ref", "--format=%(refname)"), "")
 
+    def test_codex_api_key_creates_private_home_for_quota_and_run(self):
+        action = self.root / "action"
+        adapter = action / "adapters/codex"
+        adapter.mkdir(parents=True)
+        defaults = action / "actions/dispatch/defaults"
+        defaults.mkdir(parents=True)
+        shutil.copyfile(HERE / "defaults/models.json", defaults / "models.json")
+        checks = """#!/usr/bin/env bash
+set -eu
+python3 - <<'PY'
+import os
+from pathlib import Path
+import stat
+
+home = Path(os.environ["CODEX_HOME"])
+assert home.is_dir(), "CODEX_HOME must exist"
+if os.name == "posix":
+    assert stat.S_IMODE(home.stat().st_mode) == 0o700, "CODEX_HOME must be private"
+assert not (home / "auth.json").exists(), "An API key does not require auth.json"
+PY
+"""
+        run = adapter / "run"
+        run.write_text(checks + 'test -f "$SF_WORKDIR/quota-checked"\n', encoding="utf-8")
+        quota = adapter / "quota"
+        quota.write_text(checks + 'touch "$SF_WORKDIR/quota-checked"\nprintf "{}\\n"\n', encoding="utf-8")
+        run.chmod(0o755)
+        quota.chmod(0o755)
+        self.settings.action_root = action
+        self.settings.triggers = {"/codex": "codex"}
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-provider-key"}):
+            os.environ.pop("CODEX_AUTH_JSON", None)
+            self.assertEqual(self.run_dispatch(event("/codex Implement it"))["result"], "done")
+
     def test_refreshed_auth_is_saved_even_when_adapter_times_out(self):
         self.settings.triggers = {"/codex": "codex"}
         self.settings.auth_secret_token = "secret-writeback-token"
@@ -261,6 +295,9 @@ class DispatchIntegrationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "{}", "")
             if any(str(item).replace("\\", "/").endswith("codex/run") for item in command):
                 auth = Path(kwargs["env"]["CODEX_HOME"]) / "auth.json"
+                self.assertEqual(json.loads(auth.read_text(encoding="utf-8")), {"refresh_token": "old-example-login"})
+                if os.name == "posix":
+                    self.assertEqual(stat.S_IMODE(auth.stat().st_mode), 0o600)
                 auth.write_text('{"refresh_token":"new-example-login"}')
                 raise dispatch.DispatchError("A required command could not complete.")
             return real_execute(command, **kwargs)
@@ -430,7 +467,7 @@ class PolicyTests(unittest.TestCase):
         injected = {key: "secret" for key in dispatch.PROVIDER_SECRETS + dispatch.PUBLICATION_SECRETS}
         with patch.dict(os.environ, injected):
             env = dispatch.adapter_environment(task, settings, Path("temporary"), {"model": "", "effort": "high", "tier": "normal"})
-        for key in dispatch.PUBLICATION_SECRETS + ("OPENAI_API_KEY", "CODEX_AUTH_JSON", "CODEX_API_KEY"):
+        for key in dispatch.PUBLICATION_SECRETS + ("OPENAI_API_KEY", "CODEX_AUTH_JSON", "CODEX_API_KEY", "CODEX_HOME"):
             self.assertNotIn(key, env)
         self.assertEqual(env["ANTHROPIC_API_KEY"], "secret")
 

@@ -394,7 +394,9 @@ def adapter_environment(task, settings, temporary, route):
     env.update(SF_MAX_TURNS=str(settings.max_turns), SF_MAX_TOKENS=str(settings.max_tokens),
                SF_METRICS_FILE=str(settings.metrics_file or temporary / "metrics.json"))
     if task["adapter"] == "codex":
-        env["CODEX_HOME"] = str(temporary / "codex-home")
+        codex_home = temporary / "codex-home"
+        codex_home.mkdir(mode=0o700)
+        env["CODEX_HOME"] = str(codex_home)
         if os.environ.get("OPENAI_API_KEY"):
             env["OPENAI_API_KEY"] = os.environ["OPENAI_API_KEY"]
     elif task["adapter"] == "claude" and os.environ.get("ANTHROPIC_API_KEY"):
@@ -502,7 +504,6 @@ def _dispatch(event, settings, github=None, clone_url=None):
                     raise ValueError
             except ValueError:
                 raise DispatchError("CODEX_AUTH_JSON must contain a JSON object.") from None
-            auth_path.parent.mkdir(mode=0o700)
             original_auth = json.dumps(auth)
             with auth_path.open("w", encoding="utf-8") as stream:
                 stream.write(original_auth)
