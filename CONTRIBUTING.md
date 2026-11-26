@@ -28,3 +28,5 @@ The [check script](scripts/check.sh) validates shell syntax, JSON, local Markdow
 ## Open a pull request
 
 Describe the user-visible outcome, list the checks and their results, and note any removed tests and the features they covered. The maintainer handles merging pull requests from forks. For the automated approval record and architecture labels, see the [review procedure](rules/REFERENCE.md#review-record-and-architecture-review).
+
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
