@@ -1,8 +1,8 @@
 {
-  "checked": "2026-11-26T03:02:30+00:00",
+  "checked": "2026-11-26T14:21:21+00:00",
   "by": "workflow",
   "total": 1,
-  "requests": 8,
+  "requests": 5,
   "ok": 1,
   "repos": [
     {
@@ -10,22 +10,20 @@
       "name": "renjih/soloforge",
       "ci": "green",
       "prs": {
-        "total": 3
+        "total": 0
       },
       "waiting_merge": [],
       "needs_owner": [],
       "needs_author": [],
-      "needs_arch": [
-        15
-      ],
+      "needs_arch": [],
       "dispatcher": null,
       "last_merge": {
-        "pr": 14,
-        "at": "2026-11-26T01:56:48Z"
+        "pr": 11,
+        "at": "2026-11-26T03:20:45Z"
       },
       "error": null,
-      "light": "yellow",
-      "line": "1 items need architecture review"
+      "light": "green",
+      "line": "No action needed"
     }
   ]
 }
