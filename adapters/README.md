@@ -16,12 +16,22 @@ The adapter only implements the task and writes its summary.
 | `SF_MAX_TURNS` | Positive execution-step limit; defaults to `21`. |
 | `SF_MAX_TOKENS` | Positive reported-token threshold; defaults to `244000`. |
 | `SF_PAUSE_REASON_FILE` | Optional dispatcher-supplied file; write `quota` or `budget` before returning `75`. |
+| `SF_FAILURE_FILE` | Optional dispatcher-supplied JSON file for classified adapter failures. |
 | `SF_TIMEOUT_MINUTES` | Positive provider deadline in minutes; defaults to `30`. |
 
 Return `0` for success, `75` when quota or usage limits require a pause, and any
 other nonzero code for failure. A paused task leaves no published commit. Treat
 instruction text as data: pass it through stdin or a file, never construct a shell
 command from it. Do not commit, push, or create pull requests from an adapter.
+
+On failure, an adapter can write a JSON object such as
+`{"kind": "provider", "codes": ["invalid_request"], "status": 400}` to
+`SF_FAILURE_FILE`. Use `startup` when the provider CLI exits before emitting
+an event, `provider` when it reports an error, or `unknown` otherwise. Include
+up to three codes matching `^[a-z0-9_.-]{1,80}$` and an integer HTTP status from
+100 to 599 or `null`. Write provider messages to `SF_LOG_FILE` only. The
+dispatcher validates the failure data before including a reason in the Actions
+log and result comment.
 
 ## Execution budgets
 

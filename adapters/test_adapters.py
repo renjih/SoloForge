@@ -189,6 +189,77 @@ class AdapterTests(unittest.TestCase):
         printed.assert_not_called()
         self.assertIn("private-response", Path(self.env["SF_LOG_FILE"]).read_text())
 
+    def run_failing_cli(self, provider, exit_code, events=(), stdout="", stderr=""):
+        path = self.root / "failure.json"
+        stdout += "".join(json.dumps(event) + "\n" for event in events)
+        script = (f"import sys\nsys.stdin.read()\nsys.stdout.write({stdout!r})\n"
+                  f"sys.stderr.write({stderr!r})\nsys.exit({exit_code})\n")
+        popen = subprocess.Popen
+
+        def start_process(_command, **kwargs):
+            return popen([sys.executable, "-u", "-c", script], **kwargs)
+
+        with patch.dict(os.environ, {**self.env, "SF_FAILURE_FILE": str(path)}), \
+                patch.object(runner.subprocess, "Popen", side_effect=start_process):
+            return runner.run_adapter(provider), path
+
+    def test_codex_failure_without_stdout_events_is_startup(self):
+        code, path = self.run_failing_cli("codex", 1, stdout="Startup failed.\n",
+                                         stderr='{"type":"error","message":"private stderr"}\n')
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(path.read_text()), {"kind": "startup", "codes": [], "status": None})
+
+    def test_codex_failure_extracts_provider_code_and_http_status(self):
+        body = {"error": {"code": "unsupported_value", "message": "private response"}}
+        for event in (
+            {"type": "error", "message": json.dumps({**body, "status": 400})},
+            {"type": "turn.failed", "error": {
+                "message": f"unexpected status 400 Bad Request: {json.dumps(body)}, request id: private-id",
+            }},
+        ):
+            with self.subTest(event_type=event["type"]):
+                code, path = self.run_failing_cli("codex", 1, events=[event])
+                self.assertEqual(code, 1)
+                self.assertEqual(json.loads(path.read_text()), {
+                    "kind": "provider", "codes": ["unsupported_value"], "status": 400,
+                })
+
+    def test_codex_failure_filters_codes_and_keeps_first_three_after_long_output(self):
+        codes = ["has space", "Uppercase", "x" * 81, "first", "first", "second-code", "third.code_3", "fourth"]
+        events = [{"type": "error", "message": json.dumps({"error": {"code": code}, "status": True})}
+                  for code in codes]
+        events.extend([{"type": "thread.started"}] * 210)
+        code, path = self.run_failing_cli("codex", 1, events=events)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(path.read_text()), {
+            "kind": "provider", "codes": ["first", "second-code", "third.code_3"], "status": None,
+        })
+
+    def test_codex_failure_with_ordinary_events_is_unknown(self):
+        code, path = self.run_failing_cli("codex", 1, events=[{"type": "thread.started"}])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(path.read_text()), {"kind": "unknown", "codes": [], "status": None})
+
+    def test_codex_pause_does_not_write_failure_file(self):
+        reason = Path(self.env["SF_PAUSE_REASON_FILE"])
+        for exit_code, message in ((75, "Provider paused."), (1, "rate limit reached"), (75, "rate limit reached")):
+            with self.subTest(exit_code=exit_code, message=message):
+                reason.unlink(missing_ok=True)
+                code, path = self.run_failing_cli("codex", exit_code, events=[{"type": "error", "message": message}])
+                self.assertEqual(code, 75)
+                self.assertFalse(path.exists())
+                if message == "rate limit reached":
+                    self.assertEqual(reason.read_text(), "quota\n")
+
+    def test_claude_failure_uses_result_subtype_without_result_text(self):
+        payload = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                   "result": "private provider response"}
+        code, path = self.run_failing_cli("claude", 0, events=[payload])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(path.read_text()), {
+            "kind": "provider", "codes": ["error_during_execution"], "status": None,
+        })
+
 
 class BudgetTests(unittest.TestCase):
     def setUp(self):

@@ -1,14 +1,17 @@
 """Exercise dispatch publication with the echo adapter and real local Git remotes."""
 
 import copy
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import io
 import json
 import os
 import re
 from pathlib import Path
 import subprocess
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -251,6 +254,39 @@ class DispatchIntegrationTests(unittest.TestCase):
         self.assertTrue(self.api.branch_exists(outcome["branch"]))
         self.assertEqual(git(diverted, "for-each-ref", "--format=%(refname)"), "")
 
+    def test_codex_api_key_creates_private_home_for_quota_and_run(self):
+        action = self.root / "action"
+        adapter = action / "adapters/codex"
+        adapter.mkdir(parents=True)
+        defaults = action / "actions/dispatch/defaults"
+        defaults.mkdir(parents=True)
+        shutil.copyfile(HERE / "defaults/models.json", defaults / "models.json")
+        checks = """#!/usr/bin/env bash
+set -eu
+python3 - <<'PY'
+import os
+from pathlib import Path
+import stat
+
+home = Path(os.environ["CODEX_HOME"])
+assert home.is_dir(), "CODEX_HOME must exist"
+if os.name == "posix":
+    assert stat.S_IMODE(home.stat().st_mode) == 0o700, "CODEX_HOME must be private"
+assert not (home / "auth.json").exists(), "An API key does not require auth.json"
+PY
+"""
+        run = adapter / "run"
+        run.write_text(checks + 'test -f "$SF_WORKDIR/quota-checked"\n', encoding="utf-8")
+        quota = adapter / "quota"
+        quota.write_text(checks + 'touch "$SF_WORKDIR/quota-checked"\nprintf "{}\\n"\n', encoding="utf-8")
+        run.chmod(0o755)
+        quota.chmod(0o755)
+        self.settings.action_root = action
+        self.settings.triggers = {"/codex": "codex"}
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-provider-key"}):
+            os.environ.pop("CODEX_AUTH_JSON", None)
+            self.assertEqual(self.run_dispatch(event("/codex Implement it"))["result"], "done")
+
     def test_refreshed_auth_is_saved_even_when_adapter_times_out(self):
         self.settings.triggers = {"/codex": "codex"}
         self.settings.auth_secret_token = "secret-writeback-token"
@@ -261,6 +297,9 @@ class DispatchIntegrationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "{}", "")
             if any(str(item).replace("\\", "/").endswith("codex/run") for item in command):
                 auth = Path(kwargs["env"]["CODEX_HOME"]) / "auth.json"
+                self.assertEqual(json.loads(auth.read_text(encoding="utf-8")), {"refresh_token": "old-example-login"})
+                if os.name == "posix":
+                    self.assertEqual(stat.S_IMODE(auth.stat().st_mode), 0o600)
                 auth.write_text('{"refresh_token":"new-example-login"}')
                 raise dispatch.DispatchError("A required command could not complete.")
             return real_execute(command, **kwargs)
@@ -338,6 +377,88 @@ class DispatchIntegrationTests(unittest.TestCase):
         self.assertEqual(self.api.prs, [])
         self.assertFalse(self.api.branch_exists("soloforge/issue-7-comment-123"))
 
+    def failing_action(self, failure=None, log="", diagnostics="false"):
+        event_path = self.root / "event.json"
+        event_path.write_text(json.dumps(event()), encoding="utf-8")
+        env = {**dispatch.clean_env(), "GITHUB_EVENT_NAME": "issue_comment", "GITHUB_EVENT_PATH": str(event_path),
+               "GITHUB_OUTPUT": "",
+               "SF_REPOSITORY": REPOSITORY, "SF_GITHUB_TOKEN": self.settings.token,
+               "SF_WORKDIR": str(self.root / f"failure-{len(self.api.history)}"),
+               "SF_TRIGGERS": '{"/echo":"echo"}', "SF_ADAPTER_DIAGNOSTICS": diagnostics,
+               "ANTHROPIC_API_KEY": "test-provider-key", "GH_TOKEN": "test-inherited-token"}
+        real_execute, real_dispatch = dispatch.execute, dispatch.dispatch
+
+        def run_adapter(command, **kwargs):
+            if str(dispatch.ROOT / "adapters/echo/run") in command:
+                adapter_env = kwargs["env"]
+                if failure is not None and "SF_FAILURE_FILE" in adapter_env:
+                    Path(adapter_env["SF_FAILURE_FILE"]).write_text(failure, encoding="utf-8")
+                Path(adapter_env["SF_LOG_FILE"]).write_text(log, encoding="utf-8")
+                return subprocess.CompletedProcess(command, 1, "", "")
+            return real_execute(command, **kwargs)
+
+        def dispatch_locally(incoming, settings):
+            return real_dispatch(incoming, settings, self.api, str(self.remote))
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (patch.dict(os.environ, env, clear=True),
+              patch.object(dispatch, "execute", side_effect=run_adapter),
+              patch.object(dispatch, "dispatch", side_effect=dispatch_locally),
+              redirect_stdout(stdout), redirect_stderr(stderr)):
+            self.assertEqual(dispatch.main(), 1)
+        result = self.api.comments[-1][1]
+        self.assertTrue(result.startswith("<!-- soloforge:result:v1 -->\nSoloForge result: failed."))
+        self.assertEqual(self.api.prs, [])
+        return stdout.getvalue(), stderr.getvalue(), result
+
+    def assert_failure_reason(self, output, reason):
+        _, stderr, result = output
+        self.assertIn(f"The adapter failed ({reason}). No changes were published.\n", stderr)
+        self.assertIn(f"SoloForge result: failed. {reason}\n", result)
+
+    def test_provider_failure_reason_is_in_stderr_and_result_comment(self):
+        failure = json.dumps({"kind": "provider", "codes": ["invalid_request"], "status": 400,
+                              "message": "private provider message"})
+        output = self.failing_action(failure)
+        self.assert_failure_reason(output, "provider error: invalid_request, HTTP 400")
+        self.assertNotIn("private provider message", "\n".join(output))
+
+    def test_startup_failure_reason_is_in_stderr_and_result_comment(self):
+        failure = json.dumps({"kind": "startup", "codes": [], "status": None})
+        self.assert_failure_reason(self.failing_action(failure), "provider CLI exited before starting a session")
+
+    def test_missing_or_invalid_failure_file_reports_no_classified_reason(self):
+        for failure in (None, "not JSON", json.dumps({"kind": "provider", "codes": [], "status": True})):
+            with self.subTest(failure=failure):
+                self.assert_failure_reason(self.failing_action(failure), "no classified reason")
+
+    def test_failure_reason_discards_unsafe_codes_and_status(self):
+        injected = "unsafe code\n$(echo injected-failure)"
+        failure = json.dumps({"kind": "provider", "codes": [injected, "first", "second", "third", "fourth"],
+                              "status": 700})
+        output = self.failing_action(failure)
+        self.assert_failure_reason(output, "provider error: first, second, third")
+        for forbidden in ("unsafe code", "$(echo injected-failure)", "fourth", "HTTP 700"):
+            self.assertNotIn(forbidden, "\n".join(output))
+
+    def test_failure_diagnostics_only_print_redacted_and_truncated_log_tail_when_enabled(self):
+        log = "".join(f"provider line {number:02}\n" for number in range(1, 22))
+        log += f"secrets {self.settings.token} test-provider-key test-inherited-token " + "x" * 400 + "\n"
+        stdout, stderr, result = self.failing_action(log=log, diagnostics="true")
+        actions_log = stdout + stderr
+        self.assertNotIn("provider line 02", actions_log)
+        for number in range(3, 22):
+            self.assertIn(f"provider line {number:02}\n", actions_log)
+        redacted = "secrets [redacted] [redacted] [redacted] "
+        self.assertIn(redacted + "x" * (300 - len(redacted)) + "\n", actions_log)
+        for secret in (self.settings.token, "test-provider-key", "test-inherited-token"):
+            self.assertNotIn(secret, actions_log)
+        self.assertNotIn("provider line", result)
+        self.assertNotIn("secrets", result)
+        disabled = "\n".join(self.failing_action(log=log, diagnostics="false"))
+        self.assertNotIn("provider line", disabled)
+        self.assertNotIn("secrets", disabled)
+
     def test_pause_comments_distinguish_provider_quota_and_execution_budget(self):
         for reason, expected in (("quota", "Provider quota is insufficient"), ("budget", "execution budget limit")):
             self.settings.workdir = self.root / reason
@@ -365,6 +486,58 @@ class DispatchIntegrationTests(unittest.TestCase):
         with patch.dict(os.environ, {"SF_ECHO_EXIT": "75", "OPENAI_API_KEY": "test-provider-secret"}):
             self.assertEqual(self.run_dispatch()["result"], "paused")
         self.assertEqual((self.settings.workdir / "hook-result").read_text(), "paused")
+
+    def run_with_summary(self, summary):
+        action = self.root / "action"
+        entry = action / "adapters/echo/run"
+        entry.parent.mkdir(parents=True)
+        entry.write_text(
+            '#!/usr/bin/env bash\nset -eu\nprintf "value = 42\\n" > calc.py\n'
+            'cp "$(dirname -- "$0")/summary.md" "$SF_SUMMARY_FILE"\n',
+            encoding="utf-8",
+        )
+        entry.chmod(0o755)
+        entry.with_name("summary.md").write_text(summary, encoding="utf-8")
+        defaults = action / "actions/dispatch/defaults/models.json"
+        defaults.parent.mkdir(parents=True)
+        shutil.copyfile(HERE / "defaults/models.json", defaults)
+        self.settings.action_root = action
+        self.settings.post_task = 'cp "$SF_SUMMARY_FILE" raw-summary.md'
+        github = dispatch.GitHub(self.settings)
+        with patch.object(github, "api", return_value={"html_url": f"https://github.com/{REPOSITORY}/pull/8"}) as request:
+            with patch.object(self.api, "open_pr", side_effect=github.open_pr):
+                outcome = self.run_dispatch()
+        return outcome, request.call_args.args[1]["body"]
+
+    def test_published_summary_strips_board_blocks_and_workdir_but_post_hook_gets_original(self):
+        absolute_link = f"{self.settings.workdir.resolve()}{os.sep}calc.py:8"
+        board = "```board\n" + json.dumps({"today": "Updated the calculation. " + "x" * 4100}) + "\n```\n"
+        remaining = "\nThe calculation now uses a constant.\n\n```python\nvalue = 42\n```"
+        raw = (
+            f"Updated [calc.py]({absolute_link}).\n\n \t\n{board}{remaining}\n\n"
+            '~~~board\n{"today":"Updated the calculation."}\n~~~\n'
+        )
+        expected = "Updated [calc.py](calc.py:8).\n" + remaining
+
+        outcome, pr_body = self.run_with_summary(raw)
+
+        self.assertEqual(outcome["result"], "done")
+        self.assertEqual(pr_body, "Closes #7\n\n" + expected)
+        self.assertIn(
+            (7, "SoloForge completed the task.\n\n" + expected + "\n\n" + outcome["pr_url"]),
+            self.api.comments,
+        )
+        self.assertEqual((self.settings.workdir / "raw-summary.md").read_text(encoding="utf-8"), raw)
+
+    def test_board_only_summary_uses_completion_fallback(self):
+        outcome, pr_body = self.run_with_summary('```board\n{"today":"Updated the calculation."}\n```\n')
+
+        self.assertEqual(outcome["result"], "done")
+        self.assertEqual(pr_body, "Closes #7\n\nTask completed.")
+        self.assertIn(
+            (7, "SoloForge completed the task.\n\nTask completed.\n\n" + outcome["pr_url"]),
+            self.api.comments,
+        )
 
 
 class PolicyTests(unittest.TestCase):
@@ -430,7 +603,7 @@ class PolicyTests(unittest.TestCase):
         injected = {key: "secret" for key in dispatch.PROVIDER_SECRETS + dispatch.PUBLICATION_SECRETS}
         with patch.dict(os.environ, injected):
             env = dispatch.adapter_environment(task, settings, Path("temporary"), {"model": "", "effort": "high", "tier": "normal"})
-        for key in dispatch.PUBLICATION_SECRETS + ("OPENAI_API_KEY", "CODEX_AUTH_JSON", "CODEX_API_KEY"):
+        for key in dispatch.PUBLICATION_SECRETS + ("OPENAI_API_KEY", "CODEX_AUTH_JSON", "CODEX_API_KEY", "CODEX_HOME"):
             self.assertNotIn(key, env)
         self.assertEqual(env["ANTHROPIC_API_KEY"], "secret")
 

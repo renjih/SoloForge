@@ -102,6 +102,67 @@ def write_pause_reason(reason):
         private_write(path, reason + "\n")
 
 
+def failed_provider_exit(result):
+    if result.returncode == 75:
+        return 75
+    path = os.environ.get("SF_FAILURE_FILE")
+    if path:
+        private_write(path, json.dumps(result.failure) + "\n")
+    return 1
+
+
+def http_status(*objects):
+    for fields in objects:
+        for key in ("status", "status_code", "statusCode"):
+            status = fields.get(key)
+            if type(status) is int and 100 <= status <= 599:
+                return status
+    return None
+
+
+def codex_failure_fields(event):
+    error = event.get("error")
+    if not isinstance(error, dict):
+        error = {}
+    message = event.get("message", error.get("message"))
+    status = None
+    if isinstance(message, str):
+        # Codex can prefix a JSON response body and append request metadata.
+        prefix = re.match(r"(?:unexpected status|HTTP) ([1-5][0-9]{2})(?=[:\s]|$)[^:\r\n]*(?::|$)", message, re.I)
+        if prefix:
+            status = int(prefix.group(1))
+            message = message[prefix.end():]
+        try:
+            message, _ = json.JSONDecoder().raw_decode(message.lstrip())
+        except (ValueError, RecursionError):
+            message = None
+    body = message if isinstance(message, dict) else {}
+    body_error = body.get("error")
+    if not isinstance(body_error, dict):
+        body_error = {}
+    return body_error.get("code", error.get("code")), status or http_status(event, error, body, body_error)
+
+
+def observe_failure(event, provider, failure):
+    if not isinstance(event, dict):
+        return
+    if failure["kind"] == "startup":
+        failure["kind"] = "unknown"
+    kind = event.get("type")
+    if kind in ("error", "turn.failed"):
+        code, status = codex_failure_fields(event)
+    elif provider == "claude" and (kind == "result" or "result" in event):
+        code, status = event.get("subtype"), http_status(event)
+    else:
+        return
+    failure["kind"] = "provider"
+    codes = failure["codes"]
+    if len(codes) < 3 and isinstance(code, str) and code not in codes and re.fullmatch(r"[a-z0-9_.-]{1,80}", code):
+        codes.append(code)
+    if failure["status"] is None:
+        failure["status"] = status
+
+
 def usage_tokens(usage, provider):
     if not isinstance(usage, dict):
         return None
@@ -159,6 +220,7 @@ def observe_event(event, provider, metrics, seen, usage_by_message):
 def supervise_provider(command, *, prompt, cwd, env, provider, max_turns, max_tokens, timeout_seconds):
     """Stop one provider process tree at a deadline or observed execution budget."""
     metrics = {"turns": 0, "tokens": None}
+    failure = {"kind": "startup", "codes": [], "status": None}
     write_metrics(metrics)
     log_path = Path(os.environ["SF_LOG_FILE"])
     private_write(log_path, "")
@@ -235,6 +297,7 @@ def supervise_provider(command, *, prompt, cwd, env, provider, max_turns, max_to
                     except ValueError:
                         continue
                     observe_event(event, provider, metrics, seen, usage_by_message)
+                    observe_failure(event, provider, failure)
                     write_metrics(metrics)
                     if metrics["turns"] >= max_turns or (
                             metrics["tokens"] is not None and metrics["tokens"] >= max_tokens):
@@ -257,6 +320,7 @@ def supervise_provider(command, *, prompt, cwd, env, provider, max_turns, max_to
     result = subprocess.CompletedProcess(command, code, "".join(output["stdout"]), "".join(output["stderr"]))
     result.budget_exhausted = exhausted
     result.log_written = True
+    result.failure = failure
     return result
 
 
@@ -326,7 +390,7 @@ def run_adapter(provider):
         if quota_failure(result.stdout + "\n" + result.stderr):
             write_pause_reason("quota")
             return 75
-        return 1
+        return failed_provider_exit(result)
 
     payload = None
     for line in result.stdout.splitlines():
@@ -337,7 +401,7 @@ def run_adapter(provider):
         if isinstance(event, dict) and (event.get("type") == "result" or "result" in event):
             payload = event
     if payload is None:
-        return 1
+        return failed_provider_exit(result)
     if payload.get("subtype") in ("error_max_turns", "error_max_budget_usd") or payload.get("terminal_reason") == "max_turns":
         write_pause_reason("budget")
         return 75
@@ -349,9 +413,9 @@ def run_adapter(provider):
         if re.search(r"(?:usage|rate)[ _-]+limit|quota[ _-]+exceeded", diagnostics, re.I):
             write_pause_reason("quota")
             return 75
-        return 1
+        return failed_provider_exit(result)
     if not isinstance(payload.get("result"), str):
-        return 1
+        return failed_provider_exit(result)
     private_write(summary, payload["result"].rstrip() + "\n")
     return 0
 

@@ -707,6 +707,7 @@ TASK_RULES = """## Board handoff
 Write one final fenced `board` JSON block in the summary. The dispatcher writes it.
 Fields: id (existing card), title (new card), status (todo, in_progress, blocked,
 needs_owner), today, state, next. Never mark done: attach the PR for merge sync.
+Write one sentence in today describing the work done on this task. Omit dates.
 Blocked cards need blocker and ruled_out (a list of failed approaches).
 Owner decisions need question, options (at least two labeled strings), recommended;
 use tier wait_for_owner for decisions requiring explicit approval.

@@ -35,6 +35,9 @@ inputs:
   max-tokens:
     description: Stop when provider-reported input and output tokens reach this task budget.
     default: "244000"
+  adapter-diagnostics:
+    description: Print the tail of the provider log on adapter failure. Recommended only for troubleshooting in private repositories.
+    default: "false"
 
 outputs:
   result:
@@ -65,4 +68,5 @@ runs:
         SF_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         SF_MAX_TURNS: ${{ inputs.max-turns }}
         SF_MAX_TOKENS: ${{ inputs.max-tokens }}
+        SF_ADAPTER_DIAGNOSTICS: ${{ inputs.adapter-diagnostics }}
       run: python3 "$GITHUB_ACTION_PATH/dispatch.py"
