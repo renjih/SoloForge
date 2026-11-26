@@ -1,8 +1,10 @@
 """Exercise dispatch publication with the echo adapter and real local Git remotes."""
 
 import copy
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import io
 import json
 import os
 import re
@@ -374,6 +376,88 @@ PY
                 self.run_dispatch()
         self.assertEqual(self.api.prs, [])
         self.assertFalse(self.api.branch_exists("soloforge/issue-7-comment-123"))
+
+    def failing_action(self, failure=None, log="", diagnostics="false"):
+        event_path = self.root / "event.json"
+        event_path.write_text(json.dumps(event()), encoding="utf-8")
+        env = {**dispatch.clean_env(), "GITHUB_EVENT_NAME": "issue_comment", "GITHUB_EVENT_PATH": str(event_path),
+               "GITHUB_OUTPUT": "",
+               "SF_REPOSITORY": REPOSITORY, "SF_GITHUB_TOKEN": self.settings.token,
+               "SF_WORKDIR": str(self.root / f"failure-{len(self.api.history)}"),
+               "SF_TRIGGERS": '{"/echo":"echo"}', "SF_ADAPTER_DIAGNOSTICS": diagnostics,
+               "ANTHROPIC_API_KEY": "test-provider-key", "GH_TOKEN": "test-inherited-token"}
+        real_execute, real_dispatch = dispatch.execute, dispatch.dispatch
+
+        def run_adapter(command, **kwargs):
+            if str(dispatch.ROOT / "adapters/echo/run") in command:
+                adapter_env = kwargs["env"]
+                if failure is not None and "SF_FAILURE_FILE" in adapter_env:
+                    Path(adapter_env["SF_FAILURE_FILE"]).write_text(failure, encoding="utf-8")
+                Path(adapter_env["SF_LOG_FILE"]).write_text(log, encoding="utf-8")
+                return subprocess.CompletedProcess(command, 1, "", "")
+            return real_execute(command, **kwargs)
+
+        def dispatch_locally(incoming, settings):
+            return real_dispatch(incoming, settings, self.api, str(self.remote))
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (patch.dict(os.environ, env, clear=True),
+              patch.object(dispatch, "execute", side_effect=run_adapter),
+              patch.object(dispatch, "dispatch", side_effect=dispatch_locally),
+              redirect_stdout(stdout), redirect_stderr(stderr)):
+            self.assertEqual(dispatch.main(), 1)
+        result = self.api.comments[-1][1]
+        self.assertTrue(result.startswith("<!-- soloforge:result:v1 -->\nSoloForge result: failed."))
+        self.assertEqual(self.api.prs, [])
+        return stdout.getvalue(), stderr.getvalue(), result
+
+    def assert_failure_reason(self, output, reason):
+        _, stderr, result = output
+        self.assertIn(f"The adapter failed ({reason}). No changes were published.\n", stderr)
+        self.assertIn(f"SoloForge result: failed. {reason}\n", result)
+
+    def test_provider_failure_reason_is_in_stderr_and_result_comment(self):
+        failure = json.dumps({"kind": "provider", "codes": ["invalid_request"], "status": 400,
+                              "message": "private provider message"})
+        output = self.failing_action(failure)
+        self.assert_failure_reason(output, "provider error: invalid_request, HTTP 400")
+        self.assertNotIn("private provider message", "\n".join(output))
+
+    def test_startup_failure_reason_is_in_stderr_and_result_comment(self):
+        failure = json.dumps({"kind": "startup", "codes": [], "status": None})
+        self.assert_failure_reason(self.failing_action(failure), "provider CLI exited before starting a session")
+
+    def test_missing_or_invalid_failure_file_reports_no_classified_reason(self):
+        for failure in (None, "not JSON", json.dumps({"kind": "provider", "codes": [], "status": True})):
+            with self.subTest(failure=failure):
+                self.assert_failure_reason(self.failing_action(failure), "no classified reason")
+
+    def test_failure_reason_discards_unsafe_codes_and_status(self):
+        injected = "unsafe code\n$(echo injected-failure)"
+        failure = json.dumps({"kind": "provider", "codes": [injected, "first", "second", "third", "fourth"],
+                              "status": 700})
+        output = self.failing_action(failure)
+        self.assert_failure_reason(output, "provider error: first, second, third")
+        for forbidden in ("unsafe code", "$(echo injected-failure)", "fourth", "HTTP 700"):
+            self.assertNotIn(forbidden, "\n".join(output))
+
+    def test_failure_diagnostics_only_print_redacted_and_truncated_log_tail_when_enabled(self):
+        log = "".join(f"provider line {number:02}\n" for number in range(1, 22))
+        log += f"secrets {self.settings.token} test-provider-key test-inherited-token " + "x" * 400 + "\n"
+        stdout, stderr, result = self.failing_action(log=log, diagnostics="true")
+        actions_log = stdout + stderr
+        self.assertNotIn("provider line 02", actions_log)
+        for number in range(3, 22):
+            self.assertIn(f"provider line {number:02}\n", actions_log)
+        redacted = "secrets [redacted] [redacted] [redacted] "
+        self.assertIn(redacted + "x" * (300 - len(redacted)) + "\n", actions_log)
+        for secret in (self.settings.token, "test-provider-key", "test-inherited-token"):
+            self.assertNotIn(secret, actions_log)
+        self.assertNotIn("provider line", result)
+        self.assertNotIn("secrets", result)
+        disabled = "\n".join(self.failing_action(log=log, diagnostics="false"))
+        self.assertNotIn("provider line", disabled)
+        self.assertNotIn("secrets", disabled)
 
     def test_pause_comments_distinguish_provider_quota_and_execution_budget(self):
         for reason, expected in (("quota", "Provider quota is insufficient"), ("budget", "execution budget limit")):

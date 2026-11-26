@@ -38,6 +38,7 @@ class DispatchWorkflowTests(unittest.TestCase):
             "SF_TIMEOUT_MINUTES": "timeout-minutes",
             "SF_MAX_TURNS": "max-turns",
             "SF_MAX_TOKENS": "max-tokens",
+            "SF_ADAPTER_DIAGNOSTICS": "adapter-diagnostics",
         }
         self.assertEqual(set(step["env"]), set(inputs))
         for environment, parameter in inputs.items():
@@ -54,6 +55,7 @@ class DispatchWorkflowTests(unittest.TestCase):
             self.assertEqual(inputs[name]["default"], "")
         for name, default in (("timeout-minutes", "30"), ("max-turns", "21"), ("max-tokens", "244000")):
             self.assertEqual(inputs[name]["default"], default)
+        self.assertEqual(inputs["adapter-diagnostics"]["default"], "false")
         self.assertEqual(set(self.action["outputs"]), {"result", "branch", "pr_url"})
         for name, output in self.action["outputs"].items():
             self.assertEqual(output["value"], "${{ steps.dispatch.outputs." + name + " }}")

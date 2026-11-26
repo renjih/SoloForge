@@ -2,6 +2,7 @@
 """Dispatch authorized comments without evaluating event data as shell code."""
 
 import base64
+from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import re
+from secrets import token_hex
 import signal
 import shutil
 import subprocess
@@ -27,10 +29,11 @@ PUBLICATION_SECRETS = ("GH_TOKEN", "GITHUB_TOKEN", "SF_GITHUB_TOKEN", "SF_AUTH_S
 TIERS = ("mechanical", "normal", "heavy", "ultra", "rework")
 DEADLINE = ContextVar("dispatch_deadline", default=None)
 ATTEMPT_MARKER = "<!-- soloforge:attempt:v1 -->"
+UNCLASSIFIED_FAILURE = "no classified reason"
 
 
 class DispatchError(Exception):
-    """Messages must be fixed descriptions, never subprocess output or credentials."""
+    """Use fixed descriptions and validated adapter error codes or HTTP statuses."""
 
 
 class DispatchTimeout(DispatchError):
@@ -125,6 +128,8 @@ class Settings:
     publication_url: str = ""
     ledger_issue: int | None = None
     ledger_record: dict | None = None
+    adapter_diagnostics: bool = False
+    failure_reason: str = UNCLASSIFIED_FAILURE
 
     def validate(self):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository):
@@ -337,11 +342,51 @@ def quota_level(config, snapshot):
     return "normal"
 
 
-def safe_summary(path, secrets):
-    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else "Task completed."
+def redact_secrets(text, secrets):
     for secret in sorted((value for value in secrets if value), key=len, reverse=True):
         text = text.replace(secret, "[redacted]")
+    return text
+
+
+def safe_summary(path, secrets):
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else "Task completed."
+    text = redact_secrets(text, secrets)
     return text[:4000].strip() or "Task completed."
+
+
+def adapter_failure_reason(path):
+    try:
+        failure = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return UNCLASSIFIED_FAILURE
+    if not isinstance(failure, dict):
+        return UNCLASSIFIED_FAILURE
+    kind, codes, status = failure.get("kind"), failure.get("codes"), failure.get("status", False)
+    if not isinstance(codes, list) or (status is not None and type(status) is not int):
+        return UNCLASSIFIED_FAILURE
+    if kind == "startup":
+        return "provider CLI exited before starting a session"
+    if kind != "provider":
+        return UNCLASSIFIED_FAILURE
+    details = [code for code in codes if isinstance(code, str) and re.fullmatch(r"[a-z0-9_.-]{1,80}", code)][:3]
+    if status is not None and 100 <= status <= 599:
+        details.append(f"HTTP {status}")
+    return "provider error: " + ", ".join(details) if details else "provider error"
+
+
+def print_adapter_log_tail(path, secrets):
+    try:
+        with path.open(encoding="utf-8", errors="replace") as log:
+            tail = deque(log, maxlen=20)
+    except OSError:
+        return
+    if tail:
+        # Provider output is data even if it contains GitHub Actions workflow commands.
+        marker = token_hex(16)
+        print(f"::stop-commands::{marker}", file=sys.stderr)
+        for line in redact_secrets("".join(tail), secrets).splitlines():
+            print(line[:300], file=sys.stderr)
+        print(f"::{marker}::", file=sys.stderr)
 
 
 def secret_values(value):
@@ -390,6 +435,7 @@ def adapter_environment(task, settings, temporary, route):
                SF_TIER=route["tier"], SF_INSTRUCTION_FILE=str(temporary / "instruction.md"),
                SF_SUMMARY_FILE=str(temporary / "summary.md"), SF_LOG_FILE=str(temporary / "adapter.log"))
     env["SF_PAUSE_REASON_FILE"] = str(temporary / "pause-reason.txt")
+    env["SF_FAILURE_FILE"] = str(temporary / "failure.json")
     env["SF_ADAPTER"] = task["adapter"]
     env.update(SF_MAX_TURNS=str(settings.max_turns), SF_MAX_TOKENS=str(settings.max_tokens),
                SF_METRICS_FILE=str(settings.metrics_file or temporary / "metrics.json"))
@@ -557,7 +603,11 @@ def _dispatch(event, settings, github=None, clone_url=None):
                 github.comment(task["number"], "SoloForge paused: " + pause_description(settings.pause_reason)
                                + " No changes were committed or pushed.")
             elif code:
-                raise DispatchError("The adapter failed. No changes were published.")
+                settings.failure_reason = adapter_failure_reason(Path(env["SF_FAILURE_FILE"]))
+                if settings.adapter_diagnostics:
+                    log_secrets = secrets + [os.environ.get(key, "") for key in PUBLICATION_SECRETS]
+                    print_adapter_log_tail(Path(env["SF_LOG_FILE"]), log_secrets)
+                raise DispatchError(f"The adapter failed ({settings.failure_reason}). No changes were published.")
             else:
                 if git.run("rev-parse", "--abbrev-ref", "HEAD", cwd=settings.workdir) != task["branch"]:
                     raise DispatchError("The adapter changed branches; publication was refused.")
@@ -655,6 +705,7 @@ def dispatch(event, settings, github=None, clone_url=None):
     settings.publication_started = False
     settings.publication_branch = settings.publication_url = ""
     settings.pause_reason = ""
+    settings.failure_reason = UNCLASSIFIED_FAILURE
     settings.ledger_issue = settings.ledger_record = None
     outcome = {"result": "failed", "branch": "", "pr_url": ""}
     with tempfile.TemporaryDirectory(prefix="soloforge-metrics-") as directory:
@@ -687,6 +738,7 @@ def dispatch(event, settings, github=None, clone_url=None):
                       if outcome["result"] == "rate_limited" else
                       " The task timed out during publication; inspect the remote branch before dispatching again."
                       if outcome["result"] == "publication_unknown" else
+                      " " + settings.failure_reason if outcome["result"] == "failed" else
                       " " + pause_description(settings.pause_reason) if outcome["result"] == "paused" else "")
             try:
                 github.comment(task["number"], "<!-- soloforge:result:v1 -->\n"
@@ -717,7 +769,8 @@ def main():
                             auth_secret_token=os.environ.get("SF_AUTH_SECRET_TOKEN", ""),
                             timeout_minutes=float(os.environ.get("SF_TIMEOUT_MINUTES", "30")),
                             max_turns=int(os.environ.get("SF_MAX_TURNS", "21")),
-                            max_tokens=int(os.environ.get("SF_MAX_TOKENS", "244000")))
+                            max_tokens=int(os.environ.get("SF_MAX_TOKENS", "244000")),
+                            adapter_diagnostics=os.environ.get("SF_ADAPTER_DIAGNOSTICS") == "true")
         outcome = dispatch(event, settings)
         if os.environ.get("GITHUB_OUTPUT"):
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:

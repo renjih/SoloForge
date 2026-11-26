@@ -227,8 +227,17 @@ include `ignored` for unmatched or unauthorized comments, `refused` for fork
 PRs, `duplicate` for an existing issue task branch, `rate_limited` for a rejected
 fourth start, and `publication_unknown` for a timeout after publication began.
 An adapter or command failure fails the Action. Provider diagnostic logs stay
-private; adapters should
-write a concise publishable summary without credentials or personal data.
+private by default. Adapter failures include a reason in the Actions log and
+the result comment, using only a classification and validated provider error
+codes and HTTP status when available. Adapters should write a concise
+publishable summary without credentials or personal data.
+
+Set the Action input `adapter-diagnostics` to `"true"` to print the last 20
+lines of the adapter log on failure, with known secrets replaced by `[redacted]`
+and each line limited to 300 characters. The default is `"false"`. This puts
+raw provider output in the Actions job log, which is public for public
+repositories. We recommend enabling it only when troubleshooting in a private
+repository.
 
 ## Optional quota ledger
 
