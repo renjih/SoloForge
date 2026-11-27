@@ -1,5 +1,5 @@
 {
-  "checked": "2026-11-27T14:18:15+00:00",
+  "checked": "2026-11-27T22:54:47+00:00",
   "by": "workflow",
   "total": 1,
   "requests": 5,
@@ -17,7 +17,10 @@
       "needs_author": [],
       "needs_arch": [],
       "dispatcher": null,
-      "last_merge": null,
+      "last_merge": {
+        "pr": 1,
+        "at": "2026-11-27T14:39:41Z"
+      },
       "error": null,
       "light": "green",
       "line": "No action needed"
