@@ -14,4 +14,4 @@ Tests you deleted and the features they covered, or "None".
 
 Behavior that could break callers, credentials, or costs, or "None".
 
-Fork pull requests are merged by the maintainer. Automated approval needs a review record; see [rules/REFERENCE.md](../rules/REFERENCE.md#review-record-and-architecture-review).
+Fork pull requests are merged by the maintainer. Automated approval needs a review record; see [rules/REFERENCE.md](https://github.com/renjih/SoloForge/blob/main/rules/REFERENCE.md#review-record-and-architecture-review).
